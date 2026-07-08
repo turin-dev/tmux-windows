@@ -161,9 +161,10 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
 
-Options for `set`: `prefix <key>`, `status on|off`, `mouse on|off`. With
-`mouse on`, click a pane to select it, drag a divider to resize, and use the
-scroll wheel to enter copy mode and scroll back.
+Options for `set`: `prefix <key>`, `status on|off`, `mouse on|off`,
+`base-index <n>` (first window number), `pane-base-index <n>`. With `mouse on`,
+click a pane to select it, drag a divider to resize, and use the scroll wheel to
+enter copy mode and scroll back.
 
 ### Headless self-tests
 

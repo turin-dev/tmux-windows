@@ -51,6 +51,8 @@ struct session {
     /* options */
     int             prefix_key;
     int             status_on;
+    int             base_index;       /* first window number shown/selected */
+    int             pane_base_index;  /* first pane number for select-pane -t */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -225,7 +227,7 @@ static void cmd_select_pane(session_t *s, int argc, char **argv)
         else if (strcmp(argv[i], "-L") == 0) { window_select_dir(w, DIR_LEFT);  did = 1; }
         else if (strcmp(argv[i], "-R") == 0) { window_select_dir(w, DIR_RIGHT); did = 1; }
         else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
-            window_select_index(w, atoi(argv[i + 1])); did = 1; i++;
+            window_select_index(w, atoi(argv[i + 1]) - s->pane_base_index); did = 1; i++;
         }
     }
     if (!did)
@@ -393,7 +395,7 @@ static void cmd_select_window(session_t *s, int argc, char **argv)
         if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) { idx = atoi(argv[i + 1]); i++; }
         else if (argv[i][0] >= '0' && argv[i][0] <= '9') idx = atoi(argv[i]);
     }
-    if (idx >= 0) select_window(s, idx);
+    if (idx >= 0) select_window(s, idx - s->base_index);   /* -t is base-relative */
 }
 
 static void cmd_kill_window(session_t *s, int argc, char **argv)
@@ -453,7 +455,13 @@ static void cmd_set(session_t *s, int argc, char **argv)
             if (!on) { s->mstate = MN_NONE; s->mrawlen = 0; }
             mark(s, 1);
         }
+    } else if (strcmp(opt, "base-index") == 0 && val) {
+        s->base_index = atoi(val);
+        mark(s, 1);
+    } else if (strcmp(opt, "pane-base-index") == 0 && val) {
+        s->pane_base_index = atoi(val);
     }
+    /* Other options (mode-keys, history-limit, ...) are accepted and ignored. */
 }
 
 static void cmd_bind(session_t *s, int argc, char **argv)
@@ -916,7 +924,7 @@ static void render_status(session_t *s, strbuf_t *frame)
     int i;
 
     for (i = 0; i < s->nwindows; i++) {
-        wins[i].index = i;
+        wins[i].index = i + s->base_index;
         wins[i].name = s->windows[i]->name;
         wins[i].current = (i == s->cur);
     }

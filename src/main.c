@@ -685,6 +685,47 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* base-index shifts the window numbers shown and used by select-window -t. */
+static int run_selftest_options(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "set base-index 1");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "1:cmd") == NULL)  { printf("FAIL: base-index label missing\n"); ok = 0; }
+    if (strstr(frame.data, "0:cmd") != NULL)  { printf("FAIL: window still labelled 0\n"); ok = 0; }
+
+    session_run(s, "new-window");        /* second window -> displayed as 2 */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "2:cmd*") == NULL) { printf("FAIL: second window not labelled 2\n"); ok = 0; }
+
+    session_run(s, "select-window -t 1"); /* base-relative -> first window */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "1:cmd*") == NULL) { printf("FAIL: select-window -t 1 did not pick the first\n"); ok = 0; }
+
+    printf("%s\n", ok ? "OPTIONS SELFTEST PASSED" : "OPTIONS SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* ----- dispatch ------------------------------------------------------------- */
 
 int wmain(int argc, wchar_t **argv)
@@ -709,6 +750,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_mouse();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-break") == 0)
         return run_selftest_break();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-options") == 0)
+        return run_selftest_options();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 
