@@ -36,4 +36,4 @@ gh release create v0.1.0 dist\tmuxw-0.1.0-win-x64.zip dist\tmuxw-0.1.0-win-x64.e
 
 After the release exists, update `packaging\winget\*.yaml` with the new version,
 `InstallerUrl`, and `InstallerSha256`, then validate and submit. See
-[`packaging/winget/README.md`](packaging/winget/README.md).
+[`packaging/WINGET.md`](packaging/WINGET.md).
