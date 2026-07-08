@@ -16,10 +16,24 @@ Early development. Milestones (see the full plan for detail):
 - [x] **Phase 6** — command system + key bindings + config file
 - [ ] Phase 7 — layout presets, pane resize, mouse
 
+## Install
+
+Prebuilt Windows x64 downloads are attached to each
+[Release](https://github.com/turin-dev/tmux-windows/releases):
+
+- **Setup wizard** — `tmuxw-<version>-setup.exe`. A GUI installer with a license
+  page, install-location picker, and an option to add tmuxw to your `PATH`. It
+  installs both command names, `tmux` and `tmuxw`, and includes a clean
+  uninstaller.
+- **Portable** — `tmuxw-<version>-win-x64.zip` (or the bare `.exe`). No install;
+  unzip and run. Statically linked, so no VC++ redistributable is required.
+- **winget** — `winget install Turin.tmuxw` (both `tmux` and `tmuxw` commands).
+
 ## Requirements
 
 - Windows 10 1809+ (build 17763) or Windows 11 — for the ConPTY API
-- Visual Studio 2022/2026 with the C++ toolset (MSVC, CMake, Ninja)
+- To build from source: Visual Studio 2022/2026 with the C++ toolset (MSVC,
+  CMake, Ninja)
 
 ## Build
 
@@ -60,8 +74,14 @@ running; run `tmuxw` again to reattach. Each pane runs a shell inside a pseudo
 console; output is parsed by libvterm into a cell grid, composited by the server,
 and streamed to the client. Exit the last pane to end the session.
 
+Once installed (or with `build\` on your `PATH`), the familiar `tmux` name works
+too — `tmux` and `tmuxw` are the same binary:
+
 ```
-tmuxw                REM attach to (or start) the default session
+tmux                 REM attach to (or start) the default session
+tmux new             REM start a session and attach (alias: new-session)
+tmux new -s work     REM start/attach a named session
+tmux attach -t work  REM attach to an existing session (alias: a)
 tmuxw --standalone   REM run in one process, no server (for debugging)
 ```
 

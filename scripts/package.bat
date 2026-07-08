@@ -15,6 +15,7 @@ if exist "%OUT%" rmdir /s /q "%OUT%"
 mkdir "%STAGE%" || exit /b 1
 
 copy /y "%ROOT%\build\tmuxw.exe"            "%STAGE%\" >nul
+copy /y "%ROOT%\build\tmux.exe"             "%STAGE%\" >nul
 copy /y "%ROOT%\README.md"                  "%STAGE%\" >nul
 copy /y "%ROOT%\LICENSE"                     "%STAGE%\" >nul
 copy /y "%ROOT%\THIRD-PARTY-NOTICES.md"      "%STAGE%\" >nul

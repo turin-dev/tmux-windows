@@ -80,6 +80,14 @@ add_executable(tmuxw
 target_include_directories(tmuxw PRIVATE src)
 target_link_libraries(tmuxw PRIVATE vterm)
 
+# Also expose the familiar `tmux` command as a copy of the same binary, so
+# `tmux new` works out of the box alongside `tmuxw`.
+add_custom_command(TARGET tmuxw POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:tmuxw> $<TARGET_FILE_DIR:tmuxw>/tmux.exe
+  COMMENT "Creating tmux.exe alias for tmuxw.exe"
+  VERBATIM)
+
 # --- tests -------------------------------------------------------------------
 enable_testing()
 

@@ -1,17 +1,20 @@
 /* main.c — tmuxw entry point and command dispatch (Phase 3).
  *
- * Running `tmuxw` connects to a background server for the "default" session,
- * starting one if needed, and attaches as a thin client. The server owns all
- * panes and survives detach (Ctrl-B d); reattaching resumes the session.
+ * Running `tmux`/`tmuxw` connects to a background server for a session, starting
+ * one if needed, and attaches as a thin client. The server owns all panes and
+ * survives detach (Ctrl-B d); reattaching resumes the session.
  *
- *   tmuxw [command...]        attach to (or start) the default session
- *   tmuxw --standalone [cmd]  run a session in one process (no server; debug)
- *   tmuxw --server <pipe> [cmd]
- *                             internal: the background server process
- *   tmuxw --selftest [cmd]        headless: ConPTY output straight to stdout
- *   tmuxw --selftest-render [cmd] headless: ConPTY -> libvterm -> dump grid
- *   tmuxw --selftest-split        headless: two panes + compositor
- *   tmuxw --selftest-ipc          headless: full server/client round trip
+ *   tmux                         attach to (or start) the default session
+ *   tmux new [-s name] [cmd]     start a session (alias: new-session) and attach
+ *   tmux attach [-t name]        attach to an existing session (alias: a)
+ *   tmux --standalone [cmd]      run a session in one process (no server; debug)
+ *   tmux --server <pipe> [cmd]   internal: the background server process
+ *   tmux --selftest [cmd]        headless: ConPTY output straight to stdout
+ *   tmux --selftest-render [cmd] headless: ConPTY -> libvterm -> dump grid
+ *   tmux --selftest-split        headless: two panes + compositor
+ *   tmux --selftest-ipc          headless: full server/client round trip
+ *
+ * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
  */
 #include "platform/conpty.h"
 #include "platform/winterm.h"
@@ -104,28 +107,62 @@ static int spawn_server(const wchar_t *pipename, const wchar_t *shell)
     return spawn_server_ex(pipename, shell, NULL);
 }
 
-/* Attach to the default session, starting a server if none is running. */
-static int run_default(const wchar_t *shell)
+/* Attach to session `name` (NULL/empty -> "default") as a thin client. If no
+ * server is running: when start_if_missing is set, spawn one running `shell`;
+ * otherwise fail (the `attach` command must not create sessions). */
+static int attach_session(const wchar_t *name, const wchar_t *shell, int start_if_missing)
 {
     wchar_t pipename[512];
     HANDLE pipe;
 
-    ipc_pipe_name(pipename, 512, L"default");
+    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
 
     pipe = ipc_client_connect(pipename, 0);
     if (pipe == INVALID_HANDLE_VALUE) {
-        int rc = spawn_server(pipename, shell);
+        int rc;
+        if (!start_if_missing) {
+            fprintf(stderr, "tmux: no server running for session '%ls'\n",
+                    (name && name[0]) ? name : L"default");
+            return 1;
+        }
+        rc = spawn_server(pipename, shell);
         if (rc != 0) {
-            fprintf(stderr, "tmuxw: failed to start server (error %d)\n", rc);
+            fprintf(stderr, "tmux: failed to start server (error %d)\n", rc);
             return 1;
         }
         pipe = ipc_client_connect(pipename, 5000);
         if (pipe == INVALID_HANDLE_VALUE) {
-            fprintf(stderr, "tmuxw: could not connect to server\n");
+            fprintf(stderr, "tmux: could not connect to server\n");
             return 1;
         }
     }
     return run_client(pipe);
+}
+
+/* Parse client-subcommand arguments starting at argv[start]: a `-s`/`-t name`
+ * target and any remaining tokens joined as the command to run. `name` and
+ * `shell` are always NUL-terminated; *has_shell reports whether a command was
+ * given. */
+static void parse_target_and_shell(int argc, wchar_t **argv, int start,
+                                   wchar_t *name, size_t name_cap,
+                                   wchar_t *shell, size_t shell_cap,
+                                   int *has_shell)
+{
+    int i;
+    name[0] = L'\0';
+    shell[0] = L'\0';
+    *has_shell = 0;
+    for (i = start; i < argc; i++) {
+        if ((wcscmp(argv[i], L"-s") == 0 || wcscmp(argv[i], L"-t") == 0) && i + 1 < argc) {
+            wcscpy_s(name, name_cap, argv[++i]);
+        } else if (argv[i][0] == L'-' && argv[i][1] != L'\0') {
+            /* Unrecognized flag: ignore for now (kept forward-compatible). */
+        } else {
+            if (*has_shell) wcscat_s(shell, shell_cap, L" ");
+            wcscat_s(shell, shell_cap, argv[i]);
+            *has_shell = 1;
+        }
+    }
 }
 
 /* ----- headless self-tests -------------------------------------------------- */
@@ -606,7 +643,32 @@ int wmain(int argc, wchar_t **argv)
         return run_standalone(shell);
     }
 
-    if (argc > 1) join_cmdline(shell, argc, argv, 1);
-    else          wcscpy_s(shell, CMD_MAX, default_shell());
-    return run_default(shell);
+    /* No arguments: attach to (or start) the default session. */
+    if (argc == 1)
+        return attach_session(L"default", default_shell(), 1);
+
+    /* A tmux-style client subcommand: new / new-session / attach / a. */
+    if (argv[1][0] != L'-') {
+        const wchar_t *sub = argv[1];
+        wchar_t name[256];
+        int has_shell;
+
+        parse_target_and_shell(argc, argv, 2, name, 256, shell, CMD_MAX, &has_shell);
+
+        if (wcscmp(sub, L"new") == 0 || wcscmp(sub, L"new-session") == 0)
+            return attach_session(name, has_shell ? shell : default_shell(), 1);
+
+        if (wcscmp(sub, L"attach") == 0 || wcscmp(sub, L"attach-session") == 0 ||
+            wcscmp(sub, L"a") == 0)
+            return attach_session(name, default_shell(), 0);
+
+        fprintf(stderr, "tmux: unknown command: %ls\n", sub);
+        fprintf(stderr,
+                "usage: tmux [new|new-session|attach|attach-session|a] "
+                "[-s|-t name] [command]\n");
+        return 1;
+    }
+
+    fprintf(stderr, "tmux: unknown option: %ls\n", argv[1]);
+    return 1;
 }
