@@ -1,0 +1,14 @@
+# Normalize line endings: store text as LF in the repo, check out native.
+* text=auto
+
+# Sources are LF everywhere.
+*.c   text eol=lf
+*.h   text eol=lf
+*.md  text eol=lf
+*.txt text eol=lf
+
+# Windows batch scripts must stay CRLF.
+*.bat text eol=crlf
+
+# Let vendored submodule manage its own attributes.
+vendor/** -text

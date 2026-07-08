@@ -1,0 +1,216 @@
+/* window.c — see window.h. */
+#include "model/window.h"
+
+#include "render.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+/* Derive a short display name from a shell command line: the first token, with
+ * any path and ".exe" stripped (e.g. "C:\\...\\pwsh.exe -nol" -> "pwsh"). */
+static void derive_name(char *out, size_t cap, const wchar_t *shell)
+{
+    char narrow[256];
+    int i, start = 0, end;
+    WideCharToMultiByte(CP_UTF8, 0, shell, -1, narrow, sizeof(narrow), NULL, NULL);
+
+    /* Cut at the first space (drop arguments). */
+    for (end = 0; narrow[end] && narrow[end] != ' '; end++)
+        ;
+    /* Basename: last path separator before `end`. */
+    for (i = 0; i < end; i++)
+        if (narrow[i] == '\\' || narrow[i] == '/')
+            start = i + 1;
+    /* Strip a trailing ".exe". */
+    if (end - start > 4 && _stricmp(narrow + end - 4, ".exe") == 0)
+        end -= 4;
+
+    {
+        int n = end - start;
+        if (n > (int)cap - 1) n = (int)cap - 1;
+        if (n < 0) n = 0;
+        memcpy(out, narrow + start, (size_t)n);
+        out[n] = '\0';
+    }
+}
+
+window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
+{
+    window_t *w;
+    pane_t *first;
+    if (cols <= 0) cols = 80;
+    if (rows <= 0) rows = 24;
+
+    w = (window_t *)calloc(1, sizeof(*w));
+    if (w == NULL)
+        return NULL;
+    w->cols = cols;
+    w->rows = rows;
+    w->next_pane_id = 1;
+    derive_name(w->name, sizeof(w->name), shell);
+
+    first = pane_create(w->next_pane_id++, shell, cols, rows, wake);
+    if (first == NULL) {
+        free(w);
+        return NULL;
+    }
+    w->root = layout_leaf(first);
+    w->active = first;
+    layout_apply(w->root, 0, 0, cols, rows);
+    return w;
+}
+
+void window_free(window_t *w)
+{
+    if (w == NULL)
+        return;
+    if (w->root)
+        layout_free(w->root, 1);
+    free(w);
+}
+
+void window_apply(window_t *w, int cols, int rows)
+{
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+    w->cols = cols;
+    w->rows = rows;
+    if (w->root)
+        layout_apply(w->root, 0, 0, cols, rows);
+}
+
+void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
+{
+    pane_t *np;
+    layout_node_t *leaf = layout_find(w->root, w->active);
+    if (leaf == NULL || layout_count(w->root) >= TMUXW_MAX_PANES)
+        return;
+    np = pane_create(w->next_pane_id++, shell, w->active->cols, w->active->rows, wake);
+    if (np == NULL)
+        return;
+    if (layout_split(&w->root, leaf, type, np) == NULL) {
+        pane_close(np);
+        return;
+    }
+    w->active = np;
+    layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_select_next_pane(window_t *w)
+{
+    layout_node_t *leaf = layout_find(w->root, w->active);
+    layout_node_t *next;
+    if (leaf == NULL)
+        return;
+    next = layout_next_leaf(w->root, leaf);
+    if (next)
+        w->active = next->pane;
+}
+
+void window_select_dir(window_t *w, int dir)
+{
+    pane_t *t = layout_pane_in_dir(w->root, w->active, dir);
+    if (t)
+        w->active = t;
+}
+
+pane_t *window_active(window_t *w)
+{
+    return w->active;
+}
+
+int window_kill_active(window_t *w)
+{
+    layout_node_t *leaf = layout_find(w->root, w->active);
+    pane_t *victim = w->active;
+    if (leaf == NULL)
+        return window_empty(w);
+    layout_remove(&w->root, leaf);
+    pane_close(victim);
+    if (w->root == NULL) {
+        w->active = NULL;
+        return 1;
+    }
+    w->active = layout_first_leaf(w->root)->pane;
+    layout_apply(w->root, 0, 0, w->cols, w->rows);
+    return 0;
+}
+
+void window_write_active(window_t *w, const char *bytes, size_t n)
+{
+    if (w->active)
+        pane_write_input(w->active, bytes, n);
+}
+
+size_t window_pump(window_t *w)
+{
+    pane_t *leaves[TMUXW_MAX_PANES];
+    int count, i, removed = 0;
+    size_t parsed = 0;
+
+    count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+    for (i = 0; i < count; i++)
+        parsed += pane_pump(leaves[i]);
+
+    /* Reap any exited children. */
+    count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+    for (i = 0; i < count; i++) {
+        pane_t *p = leaves[i];
+        if (!pane_child_exited(p))
+            continue;
+        pane_pump(p);
+        {
+            layout_node_t *leaf = layout_find(w->root, p);
+            if (leaf) layout_remove(&w->root, leaf);
+        }
+        if (w->active == p)
+            w->active = NULL;
+        pane_close(p);
+        removed = 1;
+        if (w->root == NULL) {
+            w->active = NULL;
+            return parsed;
+        }
+    }
+    if (removed) {
+        if (w->active == NULL && w->root)
+            w->active = layout_first_leaf(w->root)->pane;
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+    }
+    return parsed;
+}
+
+int window_empty(const window_t *w)
+{
+    return w->root == NULL;
+}
+
+void window_render(strbuf_t *frame, window_t *w, int full_redraw,
+                   const copymode_t *cm)
+{
+    pane_t *leaves[TMUXW_MAX_PANES];
+    int count, i;
+    int copy_on_active = (cm && cm->active && cm->pane == w->active);
+
+    if (w->root == NULL)
+        return;
+
+    if (full_redraw) {
+        layout_draw_borders(w->root, frame);
+        count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+        for (i = 0; i < count; i++)
+            screen_mark_all_dirty(leaves[i]->screen);
+    }
+
+    count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+    for (i = 0; i < count; i++) {
+        if (copy_on_active && leaves[i] == w->active)
+            render_pane_copymode(frame, leaves[i], cm);
+        else
+            render_pane(frame, leaves[i]);
+    }
+
+    /* In copy mode the copy renderer already placed the cursor. */
+    if (!copy_on_active)
+        render_active_cursor(frame, w->active);
+}

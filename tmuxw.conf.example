@@ -1,0 +1,25 @@
+# Example tmuxw configuration.
+# Copy to %USERPROFILE%\.tmuxw.conf and edit to taste.
+# One command per line; '#' starts a comment.
+
+# --- options ---------------------------------------------------------------
+# Change the prefix key (default is C-b). Uncomment for a tmux-style C-a:
+# set prefix C-a
+
+# Show or hide the bottom status bar.
+set status on
+
+# --- key bindings ----------------------------------------------------------
+# Split with | and - like some popular configs (in addition to % and ").
+bind | split-window -h
+bind - split-window -v
+
+# vi-style pane selection is already bound to the arrow keys; add hjkl-ish
+# extras via the prefix if you like:
+bind o select-pane
+
+# Open copy mode with a second key.
+bind v copy-mode
+
+# Reload this file without restarting the server.
+# (Run at the command prompt: source-file %USERPROFILE%\.tmuxw.conf)
