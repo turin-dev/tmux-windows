@@ -125,6 +125,8 @@ Scroll back through a pane's history and copy text to the Windows clipboard:
 | `↑↓←→` / `h j k l`      | move the cursor                        |
 | `PageUp` / `PageDown`   | scroll a page (also `Ctrl-U`/`Ctrl-D`) |
 | `g` / `G`               | jump to top / bottom of history        |
+| `/` / `?`               | search forward / backward              |
+| `n` / `N`               | repeat search, same / opposite way     |
 | `Space`                 | start / clear a selection              |
 | `Enter` or `y`          | copy the selection and exit            |
 | `q` / `Esc`             | cancel                                 |

@@ -24,6 +24,11 @@ typedef struct copymode {
     int      esc;          /* input parser: 0 normal, 1 after ESC, 2 in CSI */
     char     csi[8];
     int      csilen;
+    /* incremental search (/ ? n N) */
+    int      searching;    /* capturing a search query */
+    int      search_dir;   /* +1 forward, -1 backward (last search direction) */
+    char     query[128];
+    int      qlen;
 } copymode_t;
 
 void copymode_enter(copymode_t *cm, pane_t *pane);
@@ -37,5 +42,9 @@ int  copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
 int  copymode_top(const copymode_t *cm);
 void copymode_cursor(const copymode_t *cm, int *vrow, int *vcol);
 int  copymode_selected(const copymode_t *cm, int line, int col);
+
+/* Search prompt state (for the status/indicator). Returns 1 while a query is
+ * being typed, with the direction char ('/' or '?') and text via the outputs. */
+int  copymode_search_prompt(const copymode_t *cm, char *dir, const char **query);
 
 #endif /* TMUXW_COPYMODE_H */

@@ -130,6 +130,62 @@ static void extract(copymode_t *cm, strbuf_t *text)
     }
 }
 
+/* Render one history line into `buf` as one char per column (ASCII; non-ASCII
+ * cells become '?'), for substring searching. Returns the length. */
+static int build_line(copymode_t *cm, int line, char *buf, int cap)
+{
+    screen_t *sc = cm->pane->screen;
+    int cols = vp_cols(cm), col, n = 0;
+    for (col = 0; col < cols && n < cap - 1; col++) {
+        VTermScreenCell cell;
+        char ch = ' ';
+        if (screen_line_cell(sc, line, col, &cell) && cell.width != 0) {
+            uint32_t cp = cell.chars[0];
+            ch = (cp == 0) ? ' ' : (cp < 128 ? (char)cp : '?');
+        }
+        buf[n++] = ch;
+    }
+    buf[n] = '\0';
+    return n;
+}
+
+/* Find the next occurrence of the query in direction `dir`, starting just past
+ * the cursor and wrapping around. Moves the cursor and returns 1 if found. */
+static int do_search(copymode_t *cm, int dir)
+{
+    int nlines = total(cm);
+    char buf[1024];
+    int steps, qlen = cm->qlen;
+
+    if (qlen == 0 || nlines == 0 || dir == 0)
+        return 0;
+    cm->search_dir = dir;
+
+    for (steps = 0; steps <= nlines; steps++) {
+        int line = (((cm->cur_line + dir * steps) % nlines) + nlines) % nlines;
+        int len = build_line(cm, line, buf, sizeof(buf));
+        if (dir > 0) {
+            int from = (steps == 0) ? cm->cur_col + 1 : 0;
+            int i;
+            if (from < 0) from = 0;
+            for (i = from; i + qlen <= len; i++) {
+                if (strncmp(buf + i, cm->query, (size_t)qlen) == 0) {
+                    cm->cur_line = line; cm->cur_col = i; adjust_view(cm); return 1;
+                }
+            }
+        } else {
+            int limit = (steps == 0) ? cm->cur_col - 1 : len - 1;
+            int best = -1, i;
+            for (i = 0; i + qlen <= len && i <= limit; i++)
+                if (strncmp(buf + i, cm->query, (size_t)qlen) == 0) best = i;
+            if (best >= 0) {
+                cm->cur_line = line; cm->cur_col = best; adjust_view(cm); return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static void move(copymode_t *cm, int dline, int dcol)
 {
     cm->cur_line += dline;
@@ -204,6 +260,23 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
         if (!cm->active)                    /* exited mid-chunk */
             break;
 
+        if (cm->searching) {                /* typing a search query */
+            if (c == '\r' || c == '\n') {
+                cm->searching = 0;
+                do_search(cm, cm->search_dir);
+            } else if (c == 0x1b) {
+                cm->searching = 0;          /* cancel the query, stay in copy mode */
+                cm->qlen = 0;
+                cm->query[0] = '\0';
+            } else if (c == 0x7f || c == 0x08) {
+                if (cm->qlen > 0) cm->query[--cm->qlen] = '\0';
+            } else if (c >= 0x20 && c < 0x7f && cm->qlen < (int)sizeof(cm->query) - 1) {
+                cm->query[cm->qlen++] = (char)c;
+                cm->query[cm->qlen] = '\0';
+            }
+            continue;
+        }
+
         if (cm->esc == 1) {                 /* just saw ESC */
             if (c == '[') {
                 cm->esc = 2;
@@ -227,6 +300,11 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
         }
 
         if (c == 0x1b) { cm->esc = 1; continue; }
+
+        if (c == '/') { cm->searching = 1; cm->search_dir = +1; cm->qlen = 0; cm->query[0] = '\0'; continue; }
+        if (c == '?') { cm->searching = 1; cm->search_dir = -1; cm->qlen = 0; cm->query[0] = '\0'; continue; }
+        if (c == 'n') { do_search(cm, cm->search_dir ? cm->search_dir : 1); continue; }
+        if (c == 'N') { do_search(cm, cm->search_dir ? -cm->search_dir : -1); continue; }
 
         {
             int a = 0;
@@ -263,6 +341,15 @@ void copymode_cursor(const copymode_t *cm, int *vrow, int *vcol)
 {
     if (vrow) *vrow = cm->cur_line - cm->top;
     if (vcol) *vcol = cm->cur_col;
+}
+
+int copymode_search_prompt(const copymode_t *cm, char *dir, const char **query)
+{
+    if (!cm->searching)
+        return 0;
+    if (dir)   *dir = (cm->search_dir < 0) ? '?' : '/';
+    if (query) *query = cm->query;
+    return 1;
 }
 
 int copymode_selected(const copymode_t *cm, int line, int col)

@@ -266,6 +266,15 @@ void render_pane_copymode(strbuf_t *out, const pane_t *p, const copymode_t *cm)
         strbuf_printf(out, "\x1b[%d;%dH\x1b[7m%s\x1b[0m",
                       p->y + 1, p->x + w - ilen + 1, ind);
 
+    /* Search prompt along the pane's bottom row while typing a query. */
+    {
+        char sd;
+        const char *sq;
+        if (copymode_search_prompt(cm, &sd, &sq))
+            strbuf_printf(out, "\x1b[%d;%dH\x1b[7m%c%s \x1b[0m",
+                          p->y + vh, p->x + 1, sd, sq);
+    }
+
     /* Place the copy cursor. */
     copymode_cursor(cm, &vr, &vc);
     if (vr >= 0 && vr < vh)

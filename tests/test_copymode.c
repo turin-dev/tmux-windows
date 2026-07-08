@@ -122,12 +122,49 @@ static void test_arrow_keys(void)
     free_pane(p);
 }
 
+static char cell_ch(pane_t *p, int line, int col)
+{
+    VTermScreenCell c;
+    if (screen_line_cell(p->screen, line, col, &c) && c.chars[0] && c.chars[0] < 128)
+        return (char)c.chars[0];
+    return ' ';
+}
+
+static void test_search(void)
+{
+    pane_t *p = make_pane(10, 3);
+    copymode_t cm;
+
+    /* foo at lines 0 and 2. */
+    screen_write(p->screen, "foo\r\nbar\r\nfoo\r\nbaz\r\nqux", 22);
+    copymode_enter(&cm, p);
+
+    feed(&cm, "g", NULL);              /* top, line 0 */
+    feed(&cm, "/foo\r", NULL);         /* forward search past the cursor */
+    CHECK(cm.cur_line == 2 && cell_ch(p, cm.cur_line, cm.cur_col) == 'f',
+          "forward search jumps to the next foo (line 2)");
+    CHECK(!cm.searching, "search input state cleared after Enter");
+
+    feed(&cm, "n", NULL);             /* repeat -> wraps to the other foo */
+    CHECK(cm.cur_line == 0, "n wraps forward to line 0");
+
+    feed(&cm, "N", NULL);             /* reverse -> back to line 2 */
+    CHECK(cm.cur_line == 2, "N searches backward to line 2");
+
+    /* A query with no match leaves the cursor put. */
+    feed(&cm, "/zzz\r", NULL);
+    CHECK(cm.cur_line == 2, "no-match search does not move the cursor");
+
+    free_pane(p);
+}
+
 int main(void)
 {
     test_enter_and_scroll();
     test_select_and_copy();
     test_escape_cancels();
     test_arrow_keys();
+    test_search();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);
