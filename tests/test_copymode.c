@@ -158,6 +158,35 @@ static void test_search(void)
     free_pane(p);
 }
 
+static void test_motions(void)
+{
+    pane_t *p = make_pane(20, 2);
+    copymode_t cm;
+    /* line 0: "the quick fox"  (t0 h1 e2 _3 q4 u5 i6 c7 k8 _9 f10 o11 x12) */
+    screen_write(p->screen, "the quick fox\r\nsecond line here", 31);
+    copymode_enter(&cm, p);
+
+    feed(&cm, "g", NULL);              /* top line, col 0 */
+    feed(&cm, "$", NULL);
+    CHECK(cm.cur_col == 12, "$ moves to last non-space");
+    feed(&cm, "0", NULL);
+    CHECK(cm.cur_col == 0, "0 moves to start of line");
+    feed(&cm, "w", NULL);
+    CHECK(cm.cur_col == 4, "w moves to next word (quick)");
+    feed(&cm, "w", NULL);
+    CHECK(cm.cur_col == 10, "w moves to next word (fox)");
+    feed(&cm, "b", NULL);
+    CHECK(cm.cur_col == 4, "b moves back to previous word");
+    feed(&cm, "e", NULL);
+    CHECK(cm.cur_col == 8, "e moves to end of word");
+
+    /* 'v' toggles selection like Space. */
+    feed(&cm, "v", NULL);
+    CHECK(copymode_selected(&cm, cm.cur_line, cm.cur_col) == 1, "v starts a selection");
+
+    free_pane(p);
+}
+
 int main(void)
 {
     test_enter_and_scroll();
@@ -165,6 +194,7 @@ int main(void)
     test_escape_cancels();
     test_arrow_keys();
     test_search();
+    test_motions();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);

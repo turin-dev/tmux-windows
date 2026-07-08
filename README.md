@@ -125,11 +125,15 @@ Scroll back through a pane's history and copy text to the Windows clipboard:
 | Key                     | Action                                 |
 |-------------------------|----------------------------------------|
 | `↑↓←→` / `h j k l`      | move the cursor                        |
-| `PageUp` / `PageDown`   | scroll a page (also `Ctrl-U`/`Ctrl-D`) |
+| `w` / `b` / `e`         | next / previous / end of word          |
+| `0` / `^` / `$`         | line start / first word / line end     |
+| `PageUp` / `PageDown`   | scroll a full page                     |
+| `Ctrl-U` / `Ctrl-D`     | scroll a half page                     |
+| `H` / `M` / `L`         | top / middle / bottom of the viewport  |
 | `g` / `G`               | jump to top / bottom of history        |
 | `/` / `?`               | search forward / backward              |
 | `n` / `N`               | repeat search, same / opposite way     |
-| `Space`                 | start / clear a selection              |
+| `Space` / `v`           | start / clear a selection              |
 | `Enter` or `y`          | copy the selection and exit            |
 | `q` / `Esc`             | cancel                                 |
 

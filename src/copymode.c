@@ -193,6 +193,57 @@ static void move(copymode_t *cm, int dline, int dcol)
     adjust_view(cm);
 }
 
+static int last_nonspace(copymode_t *cm, int line)
+{
+    char b[1024];
+    int n = build_line(cm, line, b, sizeof b), i;
+    for (i = n - 1; i >= 0; i--)
+        if (b[i] != ' ') return i;
+    return 0;
+}
+
+static int first_nonspace(copymode_t *cm, int line)
+{
+    char b[1024];
+    int n = build_line(cm, line, b, sizeof b), i;
+    for (i = 0; i < n; i++)
+        if (b[i] != ' ') return i;
+    return 0;
+}
+
+/* vi-style word motions within the current line (space is the separator). */
+static void word_fwd(copymode_t *cm)
+{
+    char b[1024];
+    int n = build_line(cm, cm->cur_line, b, sizeof b), i = cm->cur_col;
+    while (i < n && b[i] != ' ') i++;   /* leave the current word */
+    while (i < n && b[i] == ' ') i++;   /* skip the gap */
+    if (i >= n) i = (n > 0) ? n - 1 : 0;
+    cm->cur_col = i;
+}
+
+static void word_back(copymode_t *cm)
+{
+    char b[1024];
+    int i = cm->cur_col;
+    (void)build_line(cm, cm->cur_line, b, sizeof b);
+    if (i > 0) i--;
+    while (i > 0 && b[i] == ' ') i--;
+    while (i > 0 && b[i - 1] != ' ') i--;
+    cm->cur_col = i;
+}
+
+static void word_end(copymode_t *cm)
+{
+    char b[1024];
+    int n = build_line(cm, cm->cur_line, b, sizeof b), i = cm->cur_col;
+    if (i < n - 1) i++;
+    while (i < n && b[i] == ' ') i++;
+    while (i < n - 1 && b[i + 1] != ' ') i++;
+    if (i >= n) i = (n > 0) ? n - 1 : 0;
+    cm->cur_col = i;
+}
+
 static void page(copymode_t *cm, int dir)
 {
     move(cm, dir * vp_rows(cm), 0);
@@ -210,6 +261,15 @@ static int action(copymode_t *cm, int what, strbuf_t *text)
         case 'D': page(cm, +1); break;   /* page down */
         case 'g': cm->cur_line = 0; adjust_view(cm); break;
         case 'G': cm->cur_line = total(cm) - 1; adjust_view(cm); break;
+        case '0': cm->cur_col = 0; adjust_view(cm); break;
+        case '$': cm->cur_col = last_nonspace(cm, cm->cur_line); adjust_view(cm); break;
+        case '^': cm->cur_col = first_nonspace(cm, cm->cur_line); adjust_view(cm); break;
+        case 'w': word_fwd(cm); adjust_view(cm); break;
+        case 'b': word_back(cm); adjust_view(cm); break;
+        case 'e': word_end(cm); adjust_view(cm); break;
+        case 'H': cm->cur_line = cm->top; adjust_view(cm); break;
+        case 'M': cm->cur_line = cm->top + vp_rows(cm) / 2; adjust_view(cm); break;
+        case 'L': cm->cur_line = cm->top + vp_rows(cm) - 1; adjust_view(cm); break;
         case ' ':
             if (!cm->sel) {
                 cm->sel = 1;
@@ -305,16 +365,19 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
         if (c == '?') { cm->searching = 1; cm->search_dir = -1; cm->qlen = 0; cm->query[0] = '\0'; continue; }
         if (c == 'n') { do_search(cm, cm->search_dir ? cm->search_dir : 1); continue; }
         if (c == 'N') { do_search(cm, cm->search_dir ? -cm->search_dir : -1); continue; }
+        if (c == 0x15) { move(cm, -(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-U: half up */
+        if (c == 0x04) { move(cm, +(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-D: half down */
 
         {
             int a = 0;
             switch (c) {
                 case 'k': case 'j': case 'h': case 'l':
-                case 'g': case 'G': case 'q': a = c; break;
-                case ' ': a = ' '; break;
+                case 'g': case 'G': case 'q':
+                case '0': case '$': case '^':
+                case 'w': case 'b': case 'e':
+                case 'H': case 'M': case 'L': a = c; break;
+                case 'v': case ' ': a = ' '; break;   /* v: visual toggle (like Space) */
                 case '\r': case '\n': case 'y': a = '\r'; break;
-                case 0x15: a = 'u'; break;   /* Ctrl-U */
-                case 0x04: a = 'D'; break;   /* Ctrl-D */
                 default: a = 0; break;
             }
             if (a && action(cm, a, text))
