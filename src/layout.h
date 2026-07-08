@@ -40,7 +40,8 @@ typedef struct layout_node {
     struct layout_node  *a, *b;       /* split only */
     double               ratio;       /* fraction of space given to `a` */
     int                  dx, dy, dlen; /* divider geometry (split; set by apply) */
-    int                  alloc_cols, alloc_rows; /* area assigned by apply */
+    int                  alloc_x, alloc_y;        /* origin assigned by apply */
+    int                  alloc_cols, alloc_rows;  /* area assigned by apply */
 } layout_node_t;
 
 /* Create a leaf node wrapping `pane`. */
@@ -98,6 +99,19 @@ void layout_rotate(layout_node_t *root, int downward);
 /* Swap the pane at `active`'s leaf with its neighbor in traversal order (next=1
  * for the following pane, 0 for the preceding; wraps). Returns 1 if swapped. */
 int layout_swap(layout_node_t *root, const pane_t *active, int next);
+
+/* Mouse hit-testing (coordinates are 0-based cells; requires a prior apply). */
+
+/* The pane whose rectangle contains (x, y), or NULL. */
+pane_t *layout_pane_at(layout_node_t *root, int x, int y);
+
+/* If (x, y) lands on a split's divider, return that split (with *vertical set to
+ * 1 for a vertical divider, 0 for horizontal); otherwise NULL. */
+layout_node_t *layout_divider_at(layout_node_t *root, int x, int y, int *vertical);
+
+/* Move `split`'s divider to pass through (x, y), adjusting its ratio. Returns 1
+ * if the ratio changed. */
+int layout_set_divider(layout_node_t *split, int x, int y);
 
 /* Draw all split dividers as box-drawing lines into `out`. */
 void layout_draw_borders(const layout_node_t *node, strbuf_t *out);

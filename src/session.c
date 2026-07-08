@@ -18,6 +18,8 @@
 #include <string.h>
 
 enum { PS_NORMAL, PS_PREFIX, PS_ESC, PS_CSI };
+/* Normal-mode scanner for SGR mouse reports: ESC [ < b ; x ; y (M|m). */
+enum { MN_NONE, MN_ESC, MN_CSI, MN_MOUSE };
 
 #define PREFIX_KEY    0x02   /* default prefix: Ctrl-B */
 #define MAX_WINDOWS   64
@@ -49,6 +51,12 @@ struct session {
     /* options */
     int             prefix_key;
     int             status_on;
+    int             mouse_on;
+    int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
+    /* normal-mode SGR mouse scanner */
+    int             mstate;
+    char            mraw[48];
+    int             mrawlen;
     /* key bindings (prefix table) */
     keybind_t       bind[MAX_BINDINGS];
     int             nbind;
@@ -386,6 +394,14 @@ static void cmd_set(session_t *s, int argc, char **argv)
     } else if (strcmp(opt, "status") == 0 && val) {
         s->status_on = (strcmp(val, "on") == 0 || strcmp(val, "1") == 0);
         mark(s, 1);
+    } else if (strcmp(opt, "mouse") == 0 && val) {
+        int on = (strcmp(val, "on") == 0 || strcmp(val, "1") == 0);
+        if (on != s->mouse_on) {
+            s->mouse_on = on;
+            s->mouse_dirty = 1;
+            if (!on) { s->mstate = MN_NONE; s->mrawlen = 0; }
+            mark(s, 1);
+        }
     }
 }
 
@@ -493,6 +509,105 @@ static void handle_prefix(session_t *s, unsigned char c)
         return;
     }
     run_key(s, (int)c);
+}
+
+/* Act on one decoded SGR mouse event (x, y are 1-based screen cells). */
+static void mouse_action(session_t *s, int b, int x, int y, int press)
+{
+    window_t *w = cur_window(s);
+    int col = x - 1, row = y - 1;
+    int button = b & 0x03;
+    int motion = (b & 0x20) != 0;
+    int wheel  = (b & 0x40) != 0;
+
+    if (w == NULL || row < 0 || col < 0)
+        return;
+
+    if (wheel) {                          /* scroll wheel -> copy-mode scroll */
+        pane_t *p = window_pane_at(w, col, row);
+        int down = (b & 0x01), i;
+        strbuf_t junk;
+        if (p == NULL)
+            return;
+        if (!s->copy.active) {
+            if (down) return;             /* already at the live bottom */
+            copymode_enter(&s->copy, p);
+        }
+        strbuf_init(&junk);
+        for (i = 0; i < 3; i++)
+            copymode_input(&s->copy, down ? "j" : "k", 1, &junk);
+        strbuf_free(&junk);
+        mark(s, 1);
+        return;
+    }
+
+    if (s->copy.active)                   /* copy mode is keyboard-driven */
+        return;
+
+    if (!press) {                         /* button release ends any drag */
+        window_mouse_release(w);
+        return;
+    }
+    if (motion) {                         /* drag with a button held */
+        window_mouse_drag(w, col, row);
+        mark(s, 1);
+        return;
+    }
+    if (button == 0) {                    /* left press: divider or pane */
+        window_mouse_press(w, col, row);
+        mark(s, 1);
+    }
+}
+
+/* Forward the bytes buffered by the mouse scanner to the pane (they turned out
+ * not to be a mouse report). */
+static void mouse_flush(session_t *s, strbuf_t *fwd)
+{
+    strbuf_append(fwd, s->mraw, s->mrawlen);
+    s->mrawlen = 0;
+    s->mstate = MN_NONE;
+}
+
+/* Feed one byte to the normal-mode SGR mouse scanner. Either it completes a
+ * mouse report (consumed) or, on any mismatch, the buffered bytes are flushed
+ * to the pane so ordinary escape sequences pass through untouched. */
+static void feed_mouse_scanner(session_t *s, unsigned char c, strbuf_t *fwd)
+{
+    if (s->mrawlen >= (int)sizeof(s->mraw) - 1) {
+        mouse_flush(s, fwd);
+        return;
+    }
+    s->mraw[s->mrawlen++] = (char)c;
+
+    switch (s->mstate) {
+        case MN_ESC:
+            if (c == '[') s->mstate = MN_CSI;
+            else          mouse_flush(s, fwd);
+            break;
+        case MN_CSI:
+            if (c == '<') s->mstate = MN_MOUSE;
+            else          mouse_flush(s, fwd);
+            break;
+        case MN_MOUSE:
+            if (c == 'M' || c == 'm') {
+                int b = 0, x = 0, y = 0, i;
+                const char *lt = NULL;
+                for (i = 0; i < s->mrawlen; i++)
+                    if (s->mraw[i] == '<') { lt = &s->mraw[i + 1]; break; }
+                s->mraw[s->mrawlen] = '\0';
+                if (lt && sscanf_s(lt, "%d;%d;%d", &b, &x, &y) == 3)
+                    mouse_action(s, b, x, y, c == 'M');
+                s->mstate = MN_NONE;
+                s->mrawlen = 0;
+            } else if (!((c >= '0' && c <= '9') || c == ';')) {
+                mouse_flush(s, fwd);
+            }
+            break;
+        default:
+            s->mstate = MN_NONE;
+            s->mrawlen = 0;
+            break;
+    }
 }
 
 /* Decode a completed CSI arrow sequence (after the prefix) into a bound key.
@@ -652,13 +767,19 @@ void session_input(session_t *s, const char *bytes, size_t n)
         unsigned char c = (unsigned char)bytes[i];
         switch (s->pstate) {
             case PS_NORMAL:
-                if ((int)c == s->prefix_key) {
+                if (s->mouse_on && s->mstate != MN_NONE) {
+                    feed_mouse_scanner(s, c, &fwd);
+                } else if ((int)c == s->prefix_key) {
                     window_t *w = cur_window(s);
                     if (fwd.len && w) {
                         window_write_active(w, fwd.data, fwd.len);
                         strbuf_clear(&fwd);
                     }
                     s->pstate = PS_PREFIX;
+                } else if (s->mouse_on && c == 0x1b) {
+                    s->mstate = MN_ESC;       /* maybe an SGR mouse report */
+                    s->mrawlen = 0;
+                    s->mraw[s->mrawlen++] = (char)c;
                 } else {
                     strbuf_putc(&fwd, (char)c);
                 }
@@ -763,6 +884,15 @@ void session_render(session_t *s, strbuf_t *frame)
     strbuf_clear(frame);
     if (!s->changed || s->nwindows == 0)
         return;
+
+    /* Enable/disable terminal mouse reporting when it changes or on a full
+     * repaint (so a freshly attached client re-enables it). */
+    if (s->mouse_dirty || (s->mouse_on && s->full_redraw)) {
+        strbuf_append(frame,
+                      s->mouse_on ? "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+                                  : "\x1b[?1000l\x1b[?1002l\x1b[?1006l", 24);
+        s->mouse_dirty = 0;
+    }
 
     w = s->windows[s->cur];
     if (s->full_redraw)

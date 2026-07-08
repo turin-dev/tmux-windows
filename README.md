@@ -14,7 +14,7 @@ Early development. Milestones (see the full plan for detail):
 - [x] **Phase 4** — windows (tabs) + status bar (window list + clock)
 - [x] **Phase 5** — scrollback + vi-style copy mode + clipboard
 - [x] **Phase 6** — command system + key bindings + config file
-- [ ] Phase 7 — layout presets ✓ · pane resize ✓ · zoom ✓ · mouse (in progress)
+- [x] **Phase 7** — layout presets · pane resize · zoom · swap/rotate · mouse
 
 ## Install
 
@@ -97,6 +97,10 @@ tmuxw --standalone   REM run in one process, no server (for debugging)
 | `Ctrl-B Alt-←↑↓→`  | resize active pane (5 cells)|
 | `Ctrl-B z`     | zoom / unzoom active pane       |
 | `Ctrl-B Space` | cycle layout preset             |
+| `Ctrl-B {` / `}` | swap pane with prev / next    |
+| `Ctrl-B Ctrl-O`| rotate panes                    |
+| `Ctrl-B ;`     | select last (previously active) pane |
+| `Ctrl-B l`     | select last window              |
 | `Ctrl-B x`     | kill active pane                |
 | `Ctrl-B c`     | create a new window (tab)       |
 | `Ctrl-B n` / `p`| next / previous window         |
@@ -140,6 +144,7 @@ unbind '"'
 
 Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R]`,
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
+`rotate-window [-U]`, `swap-pane [-U|-D]`, `last-pane`, `last-window`,
 `kill-pane`, `next-window`, `previous-window`, `select-window -t N`,
 `kill-window`, `rename-window <name>`, `copy-mode`, `detach-client`,
 `send-prefix`, `command-prompt`, `set <option> <value>`, `bind <key> <command>`,
@@ -147,6 +152,10 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R]`,
 
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
+
+Options for `set`: `prefix <key>`, `status on|off`, `mouse on|off`. With
+`mouse on`, click a pane to select it, drag a divider to resize, and use the
+scroll wheel to enter copy mode and scroll back.
 
 ### Headless self-tests
 
@@ -160,6 +169,7 @@ build\tmuxw.exe --selftest-ipc            REM full server/client round trip
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session
 build\tmuxw.exe --selftest-cmd            REM command system + bindings + config
+build\tmuxw.exe --selftest-mouse          REM mouse reporting + SGR parse + actions
 ctest --test-dir build                    REM emu, layout, ipc, status, copymode, cmd
 ```
 

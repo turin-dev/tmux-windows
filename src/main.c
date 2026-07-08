@@ -607,6 +607,49 @@ static int run_selftest_cmd(void)
     return ok ? 0 : 1;
 }
 
+/* Drive the mouse path: enable mouse (DECSET emitted), a wheel-up SGR report
+ * enters copy mode, and disabling mouse emits DECRST. */
+static int run_selftest_mouse(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(300);
+    session_pump(s);
+
+    session_run(s, "set mouse on");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "\x1b[?1006h") == NULL) { printf("FAIL: mouse enable not emitted\n"); ok = 0; }
+
+    /* Wheel up (button 64) over the pane should enter copy mode. */
+    session_input(s, "\x1b[<64;10;10M", 12);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "[COPY") == NULL) { printf("FAIL: wheel-up did not enter copy mode\n"); ok = 0; }
+
+    session_input(s, "q", 1);            /* leave copy mode */
+    session_run(s, "set mouse off");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "\x1b[?1006l") == NULL) { printf("FAIL: mouse disable not emitted\n"); ok = 0; }
+
+    printf("%s\n", ok ? "MOUSE SELFTEST PASSED" : "MOUSE SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* ----- dispatch ------------------------------------------------------------- */
 
 int wmain(int argc, wchar_t **argv)
@@ -627,6 +670,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_copymode();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-cmd") == 0)
         return run_selftest_cmd();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-mouse") == 0)
+        return run_selftest_mouse();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

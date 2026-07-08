@@ -110,6 +110,8 @@ int run_client(HANDLE pipe)
     {
         strbuf_t frame;
         strbuf_init(&frame);
+        /* Disable mouse reporting, then reset attributes and clear. */
+        strbuf_append(&frame, "\x1b[?1000l\x1b[?1002l\x1b[?1006l", 24);
         strbuf_append(&frame, "\x1b[0m\x1b[2J\x1b[H", 10);
         WriteFile(term.out, frame.data, (DWORD)frame.len, NULL, NULL);
         strbuf_free(&frame);

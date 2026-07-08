@@ -104,6 +104,7 @@ void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
         return;
     }
     w->zoomed = 0;         /* splitting always reveals the full layout */
+    w->drag = NULL;
     w->last_active = w->active;
     w->active = np;
     layout_apply(w->root, 0, 0, w->cols, w->rows);
@@ -122,6 +123,7 @@ void window_set_layout(window_t *w, int preset)
     if (w->root == NULL)
         return;
     w->zoomed = 0;
+    w->drag = NULL;
     if (layout_set_preset(&w->root, preset)) {
         w->layout = preset;
         layout_apply(w->root, 0, 0, w->cols, w->rows);
@@ -177,6 +179,50 @@ void window_select_dir(window_t *w, int dir)
         set_active(w, t);
 }
 
+pane_t *window_pane_at(window_t *w, int x, int y)
+{
+    if (w->root == NULL)
+        return NULL;
+    if (w->zoomed)
+        return w->active;   /* only the active pane is visible */
+    return layout_pane_at(w->root, x, y);
+}
+
+void window_select_pane(window_t *w, pane_t *p)
+{
+    if (p && layout_find(w->root, p))
+        set_active(w, p);
+}
+
+int window_mouse_press(window_t *w, int x, int y)
+{
+    int vert;
+    layout_node_t *div;
+    if (w->root == NULL || w->zoomed)
+        return 0;
+    div = layout_divider_at(w->root, x, y, &vert);
+    if (div) {
+        w->drag = div;      /* begin dragging this divider */
+        return 1;
+    }
+    {
+        pane_t *p = layout_pane_at(w->root, x, y);
+        if (p) set_active(w, p);
+    }
+    return 0;
+}
+
+void window_mouse_drag(window_t *w, int x, int y)
+{
+    if (w->drag && layout_set_divider(w->drag, x, y))
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_mouse_release(window_t *w)
+{
+    w->drag = NULL;
+}
+
 void window_rotate(window_t *w, int downward)
 {
     if (w->root == NULL || layout_count(w->root) < 2)
@@ -215,6 +261,7 @@ int window_kill_active(window_t *w)
     layout_remove(&w->root, leaf);
     pane_close(victim);
     w->zoomed = 0;
+    w->drag = NULL;
     if (w->last_active == victim)
         w->last_active = NULL;
     if (w->root == NULL) {
@@ -266,6 +313,7 @@ size_t window_pump(window_t *w)
     }
     if (removed) {
         w->zoomed = 0;
+        w->drag = NULL;
         if (w->active == NULL && w->root)
             w->active = layout_first_leaf(w->root)->pane;
         layout_apply(w->root, 0, 0, w->cols, w->rows);

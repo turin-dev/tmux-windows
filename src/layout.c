@@ -98,6 +98,8 @@ void layout_apply(layout_node_t *node, int x, int y, int cols, int rows)
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
 
+    node->alloc_x = x;
+    node->alloc_y = y;
     node->alloc_cols = cols;
     node->alloc_rows = rows;
 
@@ -457,6 +459,67 @@ int layout_swap(layout_node_t *root, const pane_t *active, int next)
     tmp = lv[idx]->pane;
     lv[idx]->pane = lv[t]->pane;
     lv[t]->pane = tmp;
+    return 1;
+}
+
+pane_t *layout_pane_at(layout_node_t *root, int x, int y)
+{
+    if (root == NULL)
+        return NULL;
+    if (root->type == LN_LEAF) {
+        pane_t *p = root->pane;
+        if (x >= p->x && x < p->x + p->cols && y >= p->y && y < p->y + p->rows)
+            return p;
+        return NULL;
+    }
+    {
+        pane_t *r = layout_pane_at(root->a, x, y);
+        return r ? r : layout_pane_at(root->b, x, y);
+    }
+}
+
+layout_node_t *layout_divider_at(layout_node_t *root, int x, int y, int *vertical)
+{
+    if (root == NULL || root->type == LN_LEAF)
+        return NULL;
+    if (root->type == LN_SPLIT_V) {
+        if (x == root->dx && y >= root->dy && y < root->dy + root->dlen) {
+            if (vertical) *vertical = 1;
+            return root;
+        }
+    } else { /* LN_SPLIT_H */
+        if (y == root->dy && x >= root->dx && x < root->dx + root->dlen) {
+            if (vertical) *vertical = 0;
+            return root;
+        }
+    }
+    {
+        layout_node_t *r = layout_divider_at(root->a, x, y, vertical);
+        return r ? r : layout_divider_at(root->b, x, y, vertical);
+    }
+}
+
+int layout_set_divider(layout_node_t *split, int x, int y)
+{
+    double total, r, lo, hi;
+    if (split == NULL || split->type == LN_LEAF)
+        return 0;
+    if (split->type == LN_SPLIT_V) {
+        total = (double)(split->alloc_cols - 1);
+        if (total < 2.0) return 0;
+        r = (double)(x - split->alloc_x) / total;
+    } else {
+        total = (double)(split->alloc_rows - 1);
+        if (total < 2.0) return 0;
+        r = (double)(y - split->alloc_y) / total;
+    }
+    lo = 1.0 / total;
+    hi = (total - 1.0) / total;
+    if (r < lo) r = lo;
+    if (r > hi) r = hi;
+    if (r == split->ratio)
+        return 0;
+    split->ratio = r;
     return 1;
 }
 

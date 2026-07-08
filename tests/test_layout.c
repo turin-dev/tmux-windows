@@ -266,6 +266,33 @@ static void test_rotate_swap(void)
     free_pane(a); free_pane(b); free_pane(c);
 }
 
+static void test_mouse_hit(void)
+{
+    pane_t *a = make_pane(1), *b = make_pane(2);
+    layout_node_t *root = layout_leaf(a);
+    layout_node_t *split = layout_split(&root, root, LN_SPLIT_V, b);  /* a | b */
+    int vert = -1;
+    layout_apply(root, 0, 0, 80, 24);
+    /* a: cols 0..39, divider at 40, b: cols 41..79. */
+
+    CHECK(layout_pane_at(root, 5, 5) == a, "hit-test inside a -> a");
+    CHECK(layout_pane_at(root, 60, 10) == b, "hit-test inside b -> b");
+    CHECK(layout_pane_at(root, 40, 3) == NULL, "hit-test on divider -> no pane");
+    CHECK(layout_pane_at(root, 200, 3) == NULL, "hit-test out of bounds -> NULL");
+
+    CHECK(layout_divider_at(root, 40, 3, &vert) == split, "divider hit at col 40");
+    CHECK(vert == 1, "divider reported vertical");
+    CHECK(layout_divider_at(root, 41, 3, &vert) == NULL, "no divider off the line");
+
+    /* Drag the divider left to column 20: a should shrink to ~20 cols. */
+    CHECK(layout_set_divider(split, 20, 3) == 1, "set-divider changes ratio");
+    layout_apply(root, 0, 0, 80, 24);
+    CHECK(a->cols == 20, "divider drag set left pane to 20");
+
+    layout_free(root, 0);
+    free_pane(a); free_pane(b);
+}
+
 int main(void)
 {
     test_single_leaf();
@@ -277,6 +304,7 @@ int main(void)
     test_resize();
     test_presets();
     test_rotate_swap();
+    test_mouse_hit();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);

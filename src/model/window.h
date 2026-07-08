@@ -23,6 +23,7 @@ typedef struct window {
     int            cols, rows;     /* area available to panes (excludes status) */
     int            zoomed;         /* active pane temporarily fills the window */
     int            layout;         /* last-applied LAYOUT_* preset (for cycling) */
+    layout_node_t *drag;           /* divider being dragged with the mouse, or NULL */
     char           name[64];       /* display name (derived from the shell) */
 } window_t;
 
@@ -50,6 +51,17 @@ void      window_next_layout(window_t *w);
 /* Toggle zoom of the active pane (fills the window, hiding the others). */
 void      window_toggle_zoom(window_t *w);
 int       window_is_zoomed(const window_t *w);
+
+/* The pane at cell (x, y), or NULL. */
+pane_t   *window_pane_at(window_t *w, int x, int y);
+/* Make `p` active if it belongs to this window. */
+void      window_select_pane(window_t *w, pane_t *p);
+
+/* Mouse gestures: press either starts a divider drag (returns 1) or selects the
+ * pane under the cursor; drag moves an in-progress divider; release ends it. */
+int       window_mouse_press(window_t *w, int x, int y);
+void      window_mouse_drag(window_t *w, int x, int y);
+void      window_mouse_release(window_t *w);
 
 /* Rotate panes through the layout positions (downward = toward the next slot). */
 void      window_rotate(window_t *w, int downward);

@@ -10,6 +10,12 @@
 #ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
 #define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
 #endif
+#ifndef ENABLE_MOUSE_INPUT
+#define ENABLE_MOUSE_INPUT 0x0010
+#endif
+#ifndef ENABLE_EXTENDED_FLAGS
+#define ENABLE_EXTENDED_FLAGS 0x0080
+#endif
 
 int winterm_enable(winterm_t *t)
 {
@@ -35,8 +41,11 @@ int winterm_enable(winterm_t *t)
 
     /* Input: deliver keystrokes as a raw VT byte stream. Clearing LINE/ECHO/
      * PROCESSED means Ctrl+C etc. flow through to the child instead of raising
-     * a console control event. */
-    in_mode = ENABLE_VIRTUAL_TERMINAL_INPUT;
+     * a console control event. ENABLE_MOUSE_INPUT + EXTENDED_FLAGS (with
+     * quick-edit off) lets the terminal report mouse events as SGR sequences
+     * when the server enables mouse mode. */
+    in_mode = ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_MOUSE_INPUT |
+              ENABLE_EXTENDED_FLAGS;
     if (!SetConsoleMode(t->in, in_mode)) {
         SetConsoleMode(t->out, t->old_out_mode);
         return (int)GetLastError();
