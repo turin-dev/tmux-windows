@@ -31,6 +31,15 @@ typedef struct window {
 window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake);
 void      window_free(window_t *w);
 
+/* Wrap an already-running pane in a fresh window (used by break-pane). Takes
+ * ownership of `p`. Returns NULL on failure (the caller then owns `p`). */
+window_t *window_create_with_pane(pane_t *p, int cols, int rows, const char *name);
+
+/* Detach the active pane from this window without closing it, returning the
+ * pane; the window re-tiles around the rest. Returns NULL if it is the only
+ * pane (nothing to break out). */
+pane_t   *window_extract_active(window_t *w);
+
 /* Re-tile panes into a cols x rows area. */
 void      window_apply(window_t *w, int cols, int rows);
 
@@ -56,6 +65,8 @@ int       window_is_zoomed(const window_t *w);
 pane_t   *window_pane_at(window_t *w, int x, int y);
 /* Make `p` active if it belongs to this window. */
 void      window_select_pane(window_t *w, pane_t *p);
+/* Make the pane at traversal index `n` active. */
+void      window_select_index(window_t *w, int n);
 
 /* Mouse gestures: press either starts a divider drag (returns 1) or selects the
  * pane under the cursor; drag moves an in-progress divider; release ends it. */

@@ -224,6 +224,9 @@ static void cmd_select_pane(session_t *s, int argc, char **argv)
         else if (strcmp(argv[i], "-D") == 0) { window_select_dir(w, DIR_DOWN);  did = 1; }
         else if (strcmp(argv[i], "-L") == 0) { window_select_dir(w, DIR_LEFT);  did = 1; }
         else if (strcmp(argv[i], "-R") == 0) { window_select_dir(w, DIR_RIGHT); did = 1; }
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
+            window_select_index(w, atoi(argv[i + 1])); did = 1; i++;
+        }
     }
     if (!did)
         window_select_next_pane(w);
@@ -321,6 +324,54 @@ static void cmd_last_window(session_t *s, int argc, char **argv)
     if (s->last_window >= 0 && s->last_window < s->nwindows &&
         s->last_window != s->cur)
         select_window(s, s->last_window);
+}
+
+static void cmd_break_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    window_t *nw;
+    pane_t *p;
+    (void)argc; (void)argv;
+    if (w == NULL || s->nwindows >= MAX_WINDOWS)
+        return;
+    p = window_extract_active(w);
+    if (p == NULL)
+        return;                         /* only pane in the window */
+    nw = window_create_with_pane(p, s->cols, win_area_rows(s), w->name);
+    if (nw == NULL) { pane_close(p); mark(s, 1); return; }
+    s->windows[s->nwindows] = nw;
+    s->last_window = s->cur;
+    s->cur = s->nwindows;
+    s->nwindows++;
+    mark(s, 1);
+}
+
+static void cmd_paste_buffer(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    size_t len = 0;
+    char *buf;
+    (void)argc; (void)argv;
+    if (w == NULL)
+        return;
+    buf = clipboard_get_utf8(&len);
+    if (buf == NULL)
+        return;
+    {
+        strbuf_t o;
+        size_t i;
+        strbuf_init(&o);
+        for (i = 0; i < len; i++) {     /* newlines -> CR so the shell runs lines */
+            char c = buf[i];
+            if (c == '\n')      strbuf_putc(&o, '\r');
+            else if (c == '\r') /* skip (CRLF collapses to one CR) */;
+            else                strbuf_putc(&o, c);
+        }
+        if (o.len)
+            window_write_active(w, o.data, o.len);
+        strbuf_free(&o);
+    }
+    free(buf);
 }
 
 static void cmd_next_window(session_t *s, int argc, char **argv)
@@ -453,6 +504,8 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "next-layout",     cmd_next_layout },
     { "rotate-window",   cmd_rotate_window },
     { "swap-pane",       cmd_swap_pane },
+    { "break-pane",      cmd_break_pane },
+    { "paste-buffer",    cmd_paste_buffer },
     { "last-pane",       cmd_last_pane },
     { "last-window",     cmd_last_window },
     { "kill-pane",       cmd_kill_pane },
@@ -656,6 +709,8 @@ static void install_default_bindings(session_t *s)
     bind_set(s, ' ',  "next-layout");
     bind_set(s, '{',  "swap-pane -U");
     bind_set(s, '}',  "swap-pane -D");
+    bind_set(s, '!',  "break-pane");
+    bind_set(s, ']',  "paste-buffer");
     bind_set(s, ';',  "last-pane");
     bind_set(s, 'l',  "last-window");
     bind_set(s, 0x0f, "rotate-window");   /* Ctrl-O */

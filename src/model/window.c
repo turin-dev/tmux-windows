@@ -69,6 +69,46 @@ void window_free(window_t *w)
     free(w);
 }
 
+window_t *window_create_with_pane(pane_t *p, int cols, int rows, const char *name)
+{
+    window_t *w;
+    if (p == NULL)
+        return NULL;
+    if (cols <= 0) cols = 80;
+    if (rows <= 0) rows = 24;
+    w = (window_t *)calloc(1, sizeof(*w));
+    if (w == NULL)
+        return NULL;
+    w->cols = cols;
+    w->rows = rows;
+    w->next_pane_id = 2;
+    strncpy_s(w->name, sizeof(w->name), (name && name[0]) ? name : "win", _TRUNCATE);
+    w->root = layout_leaf(p);
+    if (w->root == NULL) { free(w); return NULL; }
+    w->active = p;
+    layout_apply(w->root, 0, 0, cols, rows);
+    return w;
+}
+
+pane_t *window_extract_active(window_t *w)
+{
+    pane_t *victim = w->active;
+    layout_node_t *leaf;
+    if (w->root == NULL || victim == NULL || layout_count(w->root) < 2)
+        return NULL;                       /* the sole pane: nothing to break out */
+    leaf = layout_find(w->root, victim);
+    if (leaf == NULL)
+        return NULL;
+    layout_remove(&w->root, leaf);         /* frees the node, keeps the pane */
+    w->zoomed = 0;
+    w->drag = NULL;
+    if (w->last_active == victim)
+        w->last_active = NULL;
+    w->active = layout_first_leaf(w->root)->pane;
+    layout_apply(w->root, 0, 0, w->cols, w->rows);
+    return victim;
+}
+
 void window_apply(window_t *w, int cols, int rows)
 {
     if (cols < 1) cols = 1;
@@ -192,6 +232,14 @@ void window_select_pane(window_t *w, pane_t *p)
 {
     if (p && layout_find(w->root, p))
         set_active(w, p);
+}
+
+void window_select_index(window_t *w, int n)
+{
+    pane_t *ps[TMUXW_MAX_PANES];
+    int c = layout_collect(w->root, ps, TMUXW_MAX_PANES);
+    if (n >= 0 && n < c)
+        set_active(w, ps[n]);
 }
 
 int window_mouse_press(window_t *w, int x, int y)

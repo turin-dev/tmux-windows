@@ -101,6 +101,8 @@ tmuxw --standalone   REM run in one process, no server (for debugging)
 | `Ctrl-B Ctrl-O`| rotate panes                    |
 | `Ctrl-B ;`     | select last (previously active) pane |
 | `Ctrl-B l`     | select last window              |
+| `Ctrl-B !`     | break active pane into a new window |
+| `Ctrl-B ]`     | paste the clipboard into the active pane |
 | `Ctrl-B x`     | kill active pane                |
 | `Ctrl-B c`     | create a new window (tab)       |
 | `Ctrl-B n` / `p`| next / previous window         |
@@ -144,13 +146,13 @@ bind | split-window -h     # bind a key to a command
 unbind '"'
 ```
 
-Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R]`,
+Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`,
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
-`rotate-window [-U]`, `swap-pane [-U|-D]`, `last-pane`, `last-window`,
-`kill-pane`, `next-window`, `previous-window`, `select-window -t N`,
-`kill-window`, `rename-window <name>`, `copy-mode`, `detach-client`,
-`send-prefix`, `command-prompt`, `set <option> <value>`, `bind <key> <command>`,
-`unbind <key>`, `source-file <path>`.
+`rotate-window [-U]`, `swap-pane [-U|-D]`, `break-pane`, `paste-buffer`,
+`last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
+`select-window -t N`, `kill-window`, `rename-window <name>`, `copy-mode`,
+`detach-client`, `send-prefix`, `command-prompt`, `set <option> <value>`,
+`bind <key> <command>`, `unbind <key>`, `source-file <path>`.
 
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).

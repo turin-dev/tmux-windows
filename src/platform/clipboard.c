@@ -2,6 +2,7 @@
 #include "platform/clipboard.h"
 
 #include <windows.h>
+#include <stdlib.h>
 
 int clipboard_set_utf8(const char *utf8, size_t len)
 {
@@ -43,4 +44,35 @@ int clipboard_set_utf8(const char *utf8, size_t len)
     /* On success the system owns `mem`; do not free it. */
     CloseClipboard();
     return 0;
+}
+
+char *clipboard_get_utf8(size_t *len)
+{
+    HANDLE h;
+    wchar_t *w;
+    int n;
+    char *out = NULL;
+
+    if (len) *len = 0;
+    if (!IsClipboardFormatAvailable(CF_UNICODETEXT))
+        return NULL;
+    if (!OpenClipboard(NULL))
+        return NULL;
+
+    h = GetClipboardData(CF_UNICODETEXT);
+    if (h == NULL) { CloseClipboard(); return NULL; }
+    w = (wchar_t *)GlobalLock(h);
+    if (w == NULL) { CloseClipboard(); return NULL; }
+
+    n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (n > 0) {
+        out = (char *)malloc((size_t)n);
+        if (out) {
+            WideCharToMultiByte(CP_UTF8, 0, w, -1, out, n, NULL, NULL);
+            if (len) *len = (size_t)(n - 1);   /* exclude the terminating NUL */
+        }
+    }
+    GlobalUnlock(h);
+    CloseClipboard();
+    return out;
 }

@@ -650,6 +650,41 @@ static int run_selftest_mouse(void)
     return ok ? 0 : 1;
 }
 
+/* break-pane moves the active pane of a two-pane window into a new window. */
+static int run_selftest_break(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "split-window -h");   /* window 0 now has two panes */
+    session_run(s, "break-pane");         /* active pane -> new window 1 */
+    Sleep(150);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    if (strstr(frame.data, "0:cmd") == NULL)  { printf("FAIL: original window missing\n"); ok = 0; }
+    if (strstr(frame.data, "1:cmd*") == NULL) { printf("FAIL: broken-out window not current\n"); ok = 0; }
+
+    printf("%s\n", ok ? "BREAK SELFTEST PASSED" : "BREAK SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* ----- dispatch ------------------------------------------------------------- */
 
 int wmain(int argc, wchar_t **argv)
@@ -672,6 +707,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_cmd();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-mouse") == 0)
         return run_selftest_mouse();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-break") == 0)
+        return run_selftest_break();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 
