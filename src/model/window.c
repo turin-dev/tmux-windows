@@ -104,6 +104,7 @@ void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
         return;
     }
     w->zoomed = 0;         /* splitting always reveals the full layout */
+    w->last_active = w->active;
     w->active = np;
     layout_apply(w->root, 0, 0, w->cols, w->rows);
 }
@@ -149,6 +150,15 @@ int window_is_zoomed(const window_t *w)
     return w->zoomed;
 }
 
+/* Switch the active pane, remembering the previous one for last-pane. */
+static void set_active(window_t *w, pane_t *p)
+{
+    if (p && p != w->active) {
+        w->last_active = w->active;
+        w->active = p;
+    }
+}
+
 void window_select_next_pane(window_t *w)
 {
     layout_node_t *leaf = layout_find(w->root, w->active);
@@ -157,14 +167,38 @@ void window_select_next_pane(window_t *w)
         return;
     next = layout_next_leaf(w->root, leaf);
     if (next)
-        w->active = next->pane;
+        set_active(w, next->pane);
 }
 
 void window_select_dir(window_t *w, int dir)
 {
     pane_t *t = layout_pane_in_dir(w->root, w->active, dir);
     if (t)
-        w->active = t;
+        set_active(w, t);
+}
+
+void window_rotate(window_t *w, int downward)
+{
+    if (w->root == NULL || layout_count(w->root) < 2)
+        return;
+    w->zoomed = 0;
+    layout_rotate(w->root, downward);
+    layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_swap_active(window_t *w, int next)
+{
+    if (w->root == NULL || w->active == NULL)
+        return;
+    w->zoomed = 0;
+    if (layout_swap(w->root, w->active, next))
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_select_last(window_t *w)
+{
+    if (w->last_active && layout_find(w->root, w->last_active))
+        set_active(w, w->last_active);
 }
 
 pane_t *window_active(window_t *w)
@@ -181,6 +215,8 @@ int window_kill_active(window_t *w)
     layout_remove(&w->root, leaf);
     pane_close(victim);
     w->zoomed = 0;
+    if (w->last_active == victim)
+        w->last_active = NULL;
     if (w->root == NULL) {
         w->active = NULL;
         return 1;
@@ -219,6 +255,8 @@ size_t window_pump(window_t *w)
         }
         if (w->active == p)
             w->active = NULL;
+        if (w->last_active == p)
+            w->last_active = NULL;
         pane_close(p);
         removed = 1;
         if (w->root == NULL) {

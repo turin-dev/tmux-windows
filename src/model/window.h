@@ -18,6 +18,7 @@
 typedef struct window {
     layout_node_t *root;
     pane_t        *active;
+    pane_t        *last_active;    /* previously active pane (for last-pane) */
     int            next_pane_id;
     int            cols, rows;     /* area available to panes (excludes status) */
     int            zoomed;         /* active pane temporarily fills the window */
@@ -49,6 +50,13 @@ void      window_next_layout(window_t *w);
 /* Toggle zoom of the active pane (fills the window, hiding the others). */
 void      window_toggle_zoom(window_t *w);
 int       window_is_zoomed(const window_t *w);
+
+/* Rotate panes through the layout positions (downward = toward the next slot). */
+void      window_rotate(window_t *w, int downward);
+/* Swap the active pane with its neighbor (next=1) or previous (next=0). */
+void      window_swap_active(window_t *w, int next);
+/* Re-select the previously active pane, if it still exists. */
+void      window_select_last(window_t *w);
 
 /* The active pane (NULL if the window is empty). */
 pane_t   *window_active(window_t *w);

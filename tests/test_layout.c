@@ -234,6 +234,38 @@ static void test_presets(void)
     free_pane(a); free_pane(b); free_pane(c); free_pane(d);
 }
 
+static void test_rotate_swap(void)
+{
+    pane_t *a = make_pane(1), *b = make_pane(2), *c = make_pane(3);
+    layout_node_t *root = layout_leaf(a);
+    layout_node_t *lb;
+    pane_t *p[4];
+
+    lb = layout_split(&root, root, LN_SPLIT_V, b)->b;   /* a | b */
+    layout_split(&root, lb, LN_SPLIT_V, c);             /* a | b | c */
+
+    /* Leaves hold a, b, c in order. Rotate downward: c, a, b. */
+    layout_rotate(root, 1);
+    layout_collect(root, p, 4);
+    CHECK(p[0] == c && p[1] == a && p[2] == b,
+          "rotate downward shifts panes forward");
+
+    /* Rotate upward returns to a, b, c. */
+    layout_rotate(root, 0);
+    layout_collect(root, p, 4);
+    CHECK(p[0] == a && p[1] == b && p[2] == c,
+          "rotate upward restores order");
+
+    /* Swap a with its next neighbor (b): b, a, c. */
+    CHECK(layout_swap(root, a, 1) == 1, "swap reports change");
+    layout_collect(root, p, 4);
+    CHECK(p[0] == b && p[1] == a && p[2] == c,
+          "swap next exchanges a and b");
+
+    layout_free(root, 0);
+    free_pane(a); free_pane(b); free_pane(c);
+}
+
 int main(void)
 {
     test_single_leaf();
@@ -244,6 +276,7 @@ int main(void)
     test_remove();
     test_resize();
     test_presets();
+    test_rotate_swap();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);

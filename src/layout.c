@@ -411,6 +411,55 @@ int layout_set_preset(layout_node_t **root, int preset)
     return 1;
 }
 
+/* Collect leaf nodes (not panes) in traversal order. Returns count. */
+static int collect_leaf_nodes(layout_node_t *node, layout_node_t **out, int max, int n)
+{
+    if (node == NULL || n >= max)
+        return n;
+    if (node->type == LN_LEAF) {
+        out[n++] = node;
+        return n;
+    }
+    n = collect_leaf_nodes(node->a, out, max, n);
+    n = collect_leaf_nodes(node->b, out, max, n);
+    return n;
+}
+
+void layout_rotate(layout_node_t *root, int downward)
+{
+    layout_node_t *lv[TMUXW_MAX_PANES];
+    int n = collect_leaf_nodes(root, lv, TMUXW_MAX_PANES, 0), i;
+    if (n < 2)
+        return;
+    if (downward) {
+        pane_t *last = lv[n - 1]->pane;
+        for (i = n - 1; i > 0; i--) lv[i]->pane = lv[i - 1]->pane;
+        lv[0]->pane = last;
+    } else {
+        pane_t *first = lv[0]->pane;
+        for (i = 0; i < n - 1; i++) lv[i]->pane = lv[i + 1]->pane;
+        lv[n - 1]->pane = first;
+    }
+}
+
+int layout_swap(layout_node_t *root, const pane_t *active, int next)
+{
+    layout_node_t *lv[TMUXW_MAX_PANES];
+    int n = collect_leaf_nodes(root, lv, TMUXW_MAX_PANES, 0), i, idx = -1, t;
+    pane_t *tmp;
+    if (n < 2)
+        return 0;
+    for (i = 0; i < n; i++)
+        if (lv[i]->pane == active) { idx = i; break; }
+    if (idx < 0)
+        return 0;
+    t = next ? (idx + 1) % n : (idx - 1 + n) % n;
+    tmp = lv[idx]->pane;
+    lv[idx]->pane = lv[t]->pane;
+    lv[t]->pane = tmp;
+    return 1;
+}
+
 static const char *const PRESET_NAMES[LAYOUT_COUNT] = {
     "even-horizontal", "even-vertical", "main-horizontal", "main-vertical", "tiled"
 };

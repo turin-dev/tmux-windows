@@ -36,6 +36,7 @@ struct session {
     window_t       *windows[MAX_WINDOWS];
     int             nwindows;
     int             cur;
+    int             last_window;   /* previously current window (for last-window) */
     char            name[64];
     int             cols, rows;   /* full terminal size (status bar included) */
     int             pstate;
@@ -117,6 +118,8 @@ static void remove_window(session_t *s, int idx)
     for (i = idx; i < s->nwindows - 1; i++)
         s->windows[i] = s->windows[i + 1];
     s->nwindows--;
+    if (s->last_window == idx)        s->last_window = -1;
+    else if (s->last_window > idx)    s->last_window--;
     if (s->nwindows == 0) {
         s->quit = 1;
         return;
@@ -131,6 +134,7 @@ static void remove_window(session_t *s, int idx)
 static void select_window(session_t *s, int idx)
 {
     if (idx >= 0 && idx < s->nwindows && idx != s->cur) {
+        s->last_window = s->cur;
         s->cur = idx;
         mark(s, 1);
     }
@@ -278,6 +282,39 @@ static void cmd_next_layout(session_t *s, int argc, char **argv)
     if (w) { window_next_layout(w); mark(s, 1); }
 }
 
+static void cmd_rotate_window(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    int downward = 1, i;
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "-U") == 0) downward = 0;
+    if (w) { window_rotate(w, downward); mark(s, 1); }
+}
+
+static void cmd_swap_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    int next = 1, i;   /* -D (default): swap with the next pane; -U: previous */
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "-U") == 0) next = 0;
+    if (w) { window_swap_active(w, next); mark(s, 1); }
+}
+
+static void cmd_last_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w) { window_select_last(w); mark(s, 1); }
+}
+
+static void cmd_last_window(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (s->last_window >= 0 && s->last_window < s->nwindows &&
+        s->last_window != s->cur)
+        select_window(s, s->last_window);
+}
+
 static void cmd_next_window(session_t *s, int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -398,6 +435,10 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "resize-pane",     cmd_resize_pane },
     { "select-layout",   cmd_select_layout },
     { "next-layout",     cmd_next_layout },
+    { "rotate-window",   cmd_rotate_window },
+    { "swap-pane",       cmd_swap_pane },
+    { "last-pane",       cmd_last_pane },
+    { "last-window",     cmd_last_window },
     { "kill-pane",       cmd_kill_pane },
     { "next-window",     cmd_next_window },
     { "previous-window", cmd_prev_window },
@@ -498,6 +539,11 @@ static void install_default_bindings(session_t *s)
     bind_set(s, ':',  "command-prompt");
     bind_set(s, 'z',  "resize-pane -Z");
     bind_set(s, ' ',  "next-layout");
+    bind_set(s, '{',  "swap-pane -U");
+    bind_set(s, '}',  "swap-pane -D");
+    bind_set(s, ';',  "last-pane");
+    bind_set(s, 'l',  "last-window");
+    bind_set(s, 0x0f, "rotate-window");   /* Ctrl-O */
     bind_set(s, s->prefix_key, "send-prefix");
     bind_set(s, KEY_UP,    "select-pane -U");
     bind_set(s, KEY_DOWN,  "select-pane -D");
@@ -535,6 +581,7 @@ session_t *session_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
     s->cols = cols;
     s->rows = rows;
     s->last_min = -1;
+    s->last_window = -1;
     s->prefix_key = PREFIX_KEY;
     s->status_on = 1;
     strcpy_s(s->name, sizeof(s->name), "0");

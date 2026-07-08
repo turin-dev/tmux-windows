@@ -90,6 +90,15 @@ int layout_set_preset(layout_node_t **root, int preset);
 const char *layout_preset_name(int preset);
 int         layout_preset_from_name(const char *name);
 
+/* Rotate which pane occupies each leaf: downward moves every pane to the next
+ * leaf position (the last wraps to the first); upward is the reverse. The tree
+ * shape is unchanged. Caller re-applies geometry. */
+void layout_rotate(layout_node_t *root, int downward);
+
+/* Swap the pane at `active`'s leaf with its neighbor in traversal order (next=1
+ * for the following pane, 0 for the preceding; wraps). Returns 1 if swapped. */
+int layout_swap(layout_node_t *root, const pane_t *active, int next);
+
 /* Draw all split dividers as box-drawing lines into `out`. */
 void layout_draw_borders(const layout_node_t *node, strbuf_t *out);
 
