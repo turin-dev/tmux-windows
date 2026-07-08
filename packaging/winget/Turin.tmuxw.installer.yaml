@@ -1,11 +1,12 @@
 PackageIdentifier: Turin.tmuxw
-PackageVersion: 0.1.0
+PackageVersion: 0.1.1
 InstallerType: portable
 Commands:
+  - tmux
   - tmuxw
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/turin-dev/tmux-windows/releases/download/v0.1.0/tmuxw-0.1.0-win-x64.exe
-    InstallerSha256: C529C821936D2CF38A014DD9E9237B8653F670594D4A47FD48F9EAC6D33D1FF1
+    InstallerUrl: https://github.com/turin-dev/tmux-windows/releases/download/v0.1.1/tmuxw-0.1.1-win-x64.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: installer
 ManifestVersion: 1.6.0
