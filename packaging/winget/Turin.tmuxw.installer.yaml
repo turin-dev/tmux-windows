@@ -3,7 +3,6 @@ PackageVersion: 0.1.1
 InstallerType: portable
 Commands:
   - tmux
-  - tmuxw
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/turin-dev/tmux-windows/releases/download/v0.1.1/tmuxw-0.1.1-win-x64.exe
