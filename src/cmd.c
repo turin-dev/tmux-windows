@@ -56,6 +56,15 @@ int cmd_parse_key(const char *name)
     if (len == 2 && name[0] == '^')
         return (unsigned char)(name[1]) & 0x1f;
 
+    if (_stricmp(name, "C-Up") == 0)      return KEY_C_UP;
+    if (_stricmp(name, "C-Down") == 0)    return KEY_C_DOWN;
+    if (_stricmp(name, "C-Left") == 0)    return KEY_C_LEFT;
+    if (_stricmp(name, "C-Right") == 0)   return KEY_C_RIGHT;
+    if (_stricmp(name, "M-Up") == 0)      return KEY_M_UP;
+    if (_stricmp(name, "M-Down") == 0)    return KEY_M_DOWN;
+    if (_stricmp(name, "M-Left") == 0)    return KEY_M_LEFT;
+    if (_stricmp(name, "M-Right") == 0)   return KEY_M_RIGHT;
+
     if (_stricmp(name, "Up") == 0)        return KEY_UP;
     if (_stricmp(name, "Down") == 0)      return KEY_DOWN;
     if (_stricmp(name, "Left") == 0)      return KEY_LEFT;
@@ -79,6 +88,14 @@ void cmd_key_name(int keyid, char *buf, size_t cap)
         case KEY_RIGHT: strncpy_s(buf, cap, "Right", _TRUNCATE); return;
         case KEY_PPAGE: strncpy_s(buf, cap, "PageUp", _TRUNCATE); return;
         case KEY_NPAGE: strncpy_s(buf, cap, "PageDown", _TRUNCATE); return;
+        case KEY_C_UP:    strncpy_s(buf, cap, "C-Up", _TRUNCATE); return;
+        case KEY_C_DOWN:  strncpy_s(buf, cap, "C-Down", _TRUNCATE); return;
+        case KEY_C_LEFT:  strncpy_s(buf, cap, "C-Left", _TRUNCATE); return;
+        case KEY_C_RIGHT: strncpy_s(buf, cap, "C-Right", _TRUNCATE); return;
+        case KEY_M_UP:    strncpy_s(buf, cap, "M-Up", _TRUNCATE); return;
+        case KEY_M_DOWN:  strncpy_s(buf, cap, "M-Down", _TRUNCATE); return;
+        case KEY_M_LEFT:  strncpy_s(buf, cap, "M-Left", _TRUNCATE); return;
+        case KEY_M_RIGHT: strncpy_s(buf, cap, "M-Right", _TRUNCATE); return;
         default: break;
     }
     if (keyid >= ' ' && keyid < 0x7f) {

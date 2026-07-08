@@ -24,7 +24,15 @@ enum {
     KEY_LEFT,
     KEY_RIGHT,
     KEY_PPAGE,
-    KEY_NPAGE
+    KEY_NPAGE,
+    KEY_C_UP,      /* Ctrl+arrow (fine resize) */
+    KEY_C_DOWN,
+    KEY_C_LEFT,
+    KEY_C_RIGHT,
+    KEY_M_UP,      /* Alt+arrow (coarse resize) */
+    KEY_M_DOWN,
+    KEY_M_LEFT,
+    KEY_M_RIGHT
 };
 
 /* Parse a key name ("C-b", "^B", "%", "Up", "Enter", "Space") to a key id, or

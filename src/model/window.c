@@ -75,8 +75,19 @@ void window_apply(window_t *w, int cols, int rows)
     if (rows < 1) rows = 1;
     w->cols = cols;
     w->rows = rows;
-    if (w->root)
-        layout_apply(w->root, 0, 0, cols, rows);
+    if (w->root == NULL)
+        return;
+    if (w->zoomed && w->active) {
+        /* Zoomed: the active pane owns the whole area; others keep their size
+         * (they are hidden) and are restored on unzoom. */
+        w->active->x = 0;
+        w->active->y = 0;
+        w->active->cols = cols;
+        w->active->rows = rows;
+        pane_apply_geometry(w->active);
+        return;
+    }
+    layout_apply(w->root, 0, 0, cols, rows);
 }
 
 void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
@@ -92,8 +103,50 @@ void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
         pane_close(np);
         return;
     }
+    w->zoomed = 0;         /* splitting always reveals the full layout */
     w->active = np;
     layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_resize_active(window_t *w, int dir, int amount)
+{
+    if (w->zoomed || w->root == NULL || w->active == NULL)
+        return;
+    if (layout_resize(w->root, w->active, dir, amount))
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+void window_set_layout(window_t *w, int preset)
+{
+    if (w->root == NULL)
+        return;
+    w->zoomed = 0;
+    if (layout_set_preset(&w->root, preset)) {
+        w->layout = preset;
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+    }
+}
+
+void window_next_layout(window_t *w)
+{
+    window_set_layout(w, (w->layout + 1) % LAYOUT_COUNT);
+}
+
+void window_toggle_zoom(window_t *w)
+{
+    if (w->root == NULL || w->active == NULL)
+        return;
+    if (layout_count(w->root) < 2) {   /* nothing to zoom over */
+        w->zoomed = 0;
+        return;
+    }
+    w->zoomed = !w->zoomed;
+    window_apply(w, w->cols, w->rows);
+}
+
+int window_is_zoomed(const window_t *w)
+{
+    return w->zoomed;
 }
 
 void window_select_next_pane(window_t *w)
@@ -127,6 +180,7 @@ int window_kill_active(window_t *w)
         return window_empty(w);
     layout_remove(&w->root, leaf);
     pane_close(victim);
+    w->zoomed = 0;
     if (w->root == NULL) {
         w->active = NULL;
         return 1;
@@ -173,6 +227,7 @@ size_t window_pump(window_t *w)
         }
     }
     if (removed) {
+        w->zoomed = 0;
         if (w->active == NULL && w->root)
             w->active = layout_first_leaf(w->root)->pane;
         layout_apply(w->root, 0, 0, w->cols, w->rows);
@@ -194,6 +249,19 @@ void window_render(strbuf_t *frame, window_t *w, int full_redraw,
 
     if (w->root == NULL)
         return;
+
+    /* Zoomed: draw only the active pane, filling the window (no dividers). */
+    if (w->zoomed && w->active) {
+        if (full_redraw)
+            screen_mark_all_dirty(w->active->screen);
+        if (copy_on_active)
+            render_pane_copymode(frame, w->active, cm);
+        else {
+            render_pane(frame, w->active);
+            render_active_cursor(frame, w->active);
+        }
+        return;
+    }
 
     if (full_redraw) {
         layout_draw_borders(w->root, frame);

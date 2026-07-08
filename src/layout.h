@@ -23,6 +23,16 @@ enum {
 /* Directions for directional pane selection. */
 enum { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
 
+/* Named tmux layout presets (for select-layout / next-layout). */
+enum {
+    LAYOUT_EVEN_H,   /* even-horizontal: panes in a single row */
+    LAYOUT_EVEN_V,   /* even-vertical:   panes in a single column */
+    LAYOUT_MAIN_H,   /* main-horizontal: big pane on top, rest in a row */
+    LAYOUT_MAIN_V,   /* main-vertical:   big pane on left, rest in a column */
+    LAYOUT_TILED,    /* tiled:           roughly square grid */
+    LAYOUT_COUNT
+};
+
 typedef struct layout_node {
     int                  type;
     struct layout_node  *parent;
@@ -30,6 +40,7 @@ typedef struct layout_node {
     struct layout_node  *a, *b;       /* split only */
     double               ratio;       /* fraction of space given to `a` */
     int                  dx, dy, dlen; /* divider geometry (split; set by apply) */
+    int                  alloc_cols, alloc_rows; /* area assigned by apply */
 } layout_node_t;
 
 /* Create a leaf node wrapping `pane`. */
@@ -63,6 +74,21 @@ int            layout_collect(layout_node_t *node, pane_t **out, int max);
 
 /* The pane nearest to `cur` in direction `dir`, or NULL if none. */
 pane_t *layout_pane_in_dir(layout_node_t *root, const pane_t *cur, int dir);
+
+/* Move the divider adjacent to `active` in direction `dir` by `amount` cells,
+ * growing the active pane that way. Returns 1 if the layout changed (caller
+ * then re-applies geometry). */
+int layout_resize(layout_node_t *root, const pane_t *active, int dir, int amount);
+
+/* Rebuild `*root`, arranging its existing panes into `preset` (one of the
+ * LAYOUT_* values). Panes are reused (never closed), so any held pane pointer —
+ * including the active pane — stays valid. Returns 1 on success. */
+int layout_set_preset(layout_node_t **root, int preset);
+
+/* Map between a preset id and its tmux name ("tiled", "even-horizontal", ...).
+ * layout_preset_from_name returns -1 if the name is unknown. */
+const char *layout_preset_name(int preset);
+int         layout_preset_from_name(const char *name);
 
 /* Draw all split dividers as box-drawing lines into `out`. */
 void layout_draw_borders(const layout_node_t *node, strbuf_t *out);

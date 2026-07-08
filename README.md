@@ -14,7 +14,7 @@ Early development. Milestones (see the full plan for detail):
 - [x] **Phase 4** — windows (tabs) + status bar (window list + clock)
 - [x] **Phase 5** — scrollback + vi-style copy mode + clipboard
 - [x] **Phase 6** — command system + key bindings + config file
-- [ ] Phase 7 — layout presets, pane resize, mouse
+- [ ] Phase 7 — layout presets ✓ · pane resize ✓ · zoom ✓ · mouse (in progress)
 
 ## Install
 
@@ -93,6 +93,10 @@ tmuxw --standalone   REM run in one process, no server (for debugging)
 | `Ctrl-B "`     | split active pane top / bottom  |
 | `Ctrl-B o`     | select next pane                |
 | `Ctrl-B ←↑↓→`  | select pane by direction        |
+| `Ctrl-B Ctrl-←↑↓→` | resize active pane (1 cell) |
+| `Ctrl-B Alt-←↑↓→`  | resize active pane (5 cells)|
+| `Ctrl-B z`     | zoom / unzoom active pane       |
+| `Ctrl-B Space` | cycle layout preset             |
 | `Ctrl-B x`     | kill active pane                |
 | `Ctrl-B c`     | create a new window (tab)       |
 | `Ctrl-B n` / `p`| next / previous window         |
@@ -135,10 +139,14 @@ unbind '"'
 ```
 
 Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R]`,
+`resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
 `kill-pane`, `next-window`, `previous-window`, `select-window -t N`,
 `kill-window`, `rename-window <name>`, `copy-mode`, `detach-client`,
 `send-prefix`, `command-prompt`, `set <option> <value>`, `bind <key> <command>`,
 `unbind <key>`, `source-file <path>`.
+
+Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
+`main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
 
 ### Headless self-tests
 

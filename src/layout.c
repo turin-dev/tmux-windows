@@ -2,6 +2,7 @@
 #include "layout.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 layout_node_t *layout_leaf(pane_t *pane)
 {
@@ -96,6 +97,9 @@ void layout_apply(layout_node_t *node, int x, int y, int cols, int rows)
 {
     if (cols < 1) cols = 1;
     if (rows < 1) rows = 1;
+
+    node->alloc_cols = cols;
+    node->alloc_rows = rows;
 
     if (node->type == LN_LEAF) {
         node->pane->x = x;
@@ -235,6 +239,198 @@ pane_t *layout_pane_in_dir(layout_node_t *root, const pane_t *cur, int dir)
         }
     }
     return best;
+}
+
+int layout_resize(layout_node_t *root, const pane_t *active, int dir, int amount)
+{
+    layout_node_t *leaf = layout_find(root, active);
+    layout_node_t *child, *p, *sp = NULL;
+    int wantType, wantSideA, sign;
+    double total, r, lo, hi;
+
+    if (leaf == NULL || amount == 0)
+        return 0;
+
+    switch (dir) {
+        case DIR_RIGHT: wantType = LN_SPLIT_V; wantSideA = 1; sign =  1; break;
+        case DIR_LEFT:  wantType = LN_SPLIT_V; wantSideA = 0; sign = -1; break;
+        case DIR_DOWN:  wantType = LN_SPLIT_H; wantSideA = 1; sign =  1; break;
+        case DIR_UP:    wantType = LN_SPLIT_H; wantSideA = 0; sign = -1; break;
+        default: return 0;
+    }
+
+    /* Walk up to the nearest ancestor split of the right axis whose divider sits
+     * on the requested side of the active pane. */
+    child = leaf;
+    p = leaf->parent;
+    while (p) {
+        if (p->type == wantType && ((p->a == child) ? 1 : 0) == wantSideA) {
+            sp = p;
+            break;
+        }
+        child = p;
+        p = p->parent;
+    }
+    if (sp == NULL)
+        return 0;
+
+    total = (double)((wantType == LN_SPLIT_V ? sp->alloc_cols : sp->alloc_rows) - 1);
+    if (total < 2.0)
+        return 0;
+
+    r = sp->ratio + sign * (double)amount / total;
+    lo = 1.0 / total;
+    hi = (total - 1.0) / total;
+    if (r < lo) r = lo;
+    if (r > hi) r = hi;
+    if (r == sp->ratio)
+        return 0;
+    sp->ratio = r;
+    return 1;
+}
+
+/* Build a balanced left-leaning chain of `type` splits over panes[0..n-1] so
+ * each pane receives an equal share. Returns the subtree root, or NULL. */
+static layout_node_t *build_even(pane_t **panes, int n, int type)
+{
+    layout_node_t *node;
+    int i;
+    if (n <= 0)
+        return NULL;
+    node = layout_leaf(panes[n - 1]);
+    if (node == NULL)
+        return NULL;
+    for (i = n - 2; i >= 0; i--) {
+        layout_node_t *sp = (layout_node_t *)calloc(1, sizeof(*sp));
+        layout_node_t *lf = layout_leaf(panes[i]);
+        if (sp == NULL || lf == NULL) { free(sp); free(lf); layout_free(node, 0); return NULL; }
+        sp->type = type;
+        sp->ratio = 1.0 / (double)(n - i);   /* pane i gets 1/(remaining) */
+        sp->a = lf;
+        sp->b = node;
+        lf->parent = sp;
+        node->parent = sp;
+        node = sp;
+    }
+    return node;
+}
+
+/* Combine subtree nodes into a balanced chain of `type` splits (equal shares). */
+static layout_node_t *combine_even(layout_node_t **nodes, int n, int type)
+{
+    layout_node_t *node;
+    int i;
+    if (n <= 0)
+        return NULL;
+    node = nodes[n - 1];
+    for (i = n - 2; i >= 0; i--) {
+        layout_node_t *sp = (layout_node_t *)calloc(1, sizeof(*sp));
+        if (sp == NULL) return NULL;
+        sp->type = type;
+        sp->ratio = 1.0 / (double)(n - i);
+        sp->a = nodes[i];
+        sp->b = node;
+        nodes[i]->parent = sp;
+        node->parent = sp;
+        node = sp;
+    }
+    return node;
+}
+
+static layout_node_t *build_main(pane_t **panes, int n, int mainSplit, int restType)
+{
+    layout_node_t *split, *rest, *mainleaf;
+    if (n == 1)
+        return layout_leaf(panes[0]);
+    mainleaf = layout_leaf(panes[0]);
+    rest = build_even(panes + 1, n - 1, restType);
+    split = (layout_node_t *)calloc(1, sizeof(*split));
+    if (split == NULL || mainleaf == NULL || rest == NULL) {
+        free(split); layout_free(mainleaf, 0); layout_free(rest, 0);
+        return NULL;
+    }
+    split->type = mainSplit;
+    split->ratio = 0.5;
+    split->a = mainleaf;
+    split->b = rest;
+    mainleaf->parent = split;
+    rest->parent = split;
+    return split;
+}
+
+static layout_node_t *build_tiled(pane_t **panes, int n)
+{
+    layout_node_t *rows[TMUXW_MAX_PANES];
+    int cols = 1, nrows, r, made = 0;
+    if (n <= 0)
+        return NULL;
+    while (cols * cols < n)
+        cols++;
+    nrows = (n + cols - 1) / cols;
+    for (r = 0; r < nrows; r++) {
+        int start = r * cols;
+        int len = n - start;
+        if (len > cols) len = cols;
+        rows[made] = build_even(panes + start, len, LN_SPLIT_V);
+        if (rows[made] == NULL) {
+            int k;
+            for (k = 0; k < made; k++) layout_free(rows[k], 0);
+            return NULL;
+        }
+        made++;
+    }
+    return combine_even(rows, made, LN_SPLIT_H);
+}
+
+int layout_set_preset(layout_node_t **root, int preset)
+{
+    pane_t *panes[TMUXW_MAX_PANES];
+    int n;
+    layout_node_t *built = NULL;
+
+    if (root == NULL || *root == NULL)
+        return 0;
+    n = layout_collect(*root, panes, TMUXW_MAX_PANES);
+    if (n <= 0)
+        return 0;
+
+    switch (preset) {
+        case LAYOUT_EVEN_H: built = build_even(panes, n, LN_SPLIT_V); break;
+        case LAYOUT_EVEN_V: built = build_even(panes, n, LN_SPLIT_H); break;
+        case LAYOUT_MAIN_H: built = build_main(panes, n, LN_SPLIT_H, LN_SPLIT_V); break;
+        case LAYOUT_MAIN_V: built = build_main(panes, n, LN_SPLIT_V, LN_SPLIT_H); break;
+        case LAYOUT_TILED:  built = build_tiled(panes, n); break;
+        default: return 0;
+    }
+    if (built == NULL)
+        return 0;
+
+    layout_free(*root, 0);   /* free nodes only; panes are reused in `built` */
+    built->parent = NULL;
+    *root = built;
+    return 1;
+}
+
+static const char *const PRESET_NAMES[LAYOUT_COUNT] = {
+    "even-horizontal", "even-vertical", "main-horizontal", "main-vertical", "tiled"
+};
+
+const char *layout_preset_name(int preset)
+{
+    if (preset < 0 || preset >= LAYOUT_COUNT)
+        return "";
+    return PRESET_NAMES[preset];
+}
+
+int layout_preset_from_name(const char *name)
+{
+    int i;
+    if (name == NULL)
+        return -1;
+    for (i = 0; i < LAYOUT_COUNT; i++)
+        if (strcmp(name, PRESET_NAMES[i]) == 0)
+            return i;
+    return -1;
 }
 
 /* U+2502 BOX DRAWINGS LIGHT VERTICAL, U+2500 LIGHT HORIZONTAL. */

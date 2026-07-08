@@ -20,6 +20,8 @@ typedef struct window {
     pane_t        *active;
     int            next_pane_id;
     int            cols, rows;     /* area available to panes (excludes status) */
+    int            zoomed;         /* active pane temporarily fills the window */
+    int            layout;         /* last-applied LAYOUT_* preset (for cycling) */
     char           name[64];       /* display name (derived from the shell) */
 } window_t;
 
@@ -35,6 +37,18 @@ void      window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
 
 void      window_select_next_pane(window_t *w);
 void      window_select_dir(window_t *w, int dir);
+
+/* Resize the active pane by `amount` cells toward `dir`. No-op while zoomed. */
+void      window_resize_active(window_t *w, int dir, int amount);
+
+/* Re-tile the panes into a named preset (LAYOUT_*); unzooms first. */
+void      window_set_layout(window_t *w, int preset);
+/* Cycle to the next preset. */
+void      window_next_layout(window_t *w);
+
+/* Toggle zoom of the active pane (fills the window, hiding the others). */
+void      window_toggle_zoom(window_t *w);
+int       window_is_zoomed(const window_t *w);
 
 /* The active pane (NULL if the window is empty). */
 pane_t   *window_active(window_t *w);

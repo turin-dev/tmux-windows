@@ -55,6 +55,9 @@ struct session {
     int             prompt_active;
     char            prompt[PROMPT_MAX];
     int             prompt_len;
+    /* CSI (arrow/modified-arrow) accumulator while decoding prefix sequences */
+    char            csi[16];
+    int             csilen;
 };
 
 static void session_run_command(session_t *s, const char *line);
@@ -223,6 +226,58 @@ static void cmd_kill_pane(session_t *s, int argc, char **argv)
     else mark(s, 1);
 }
 
+static void cmd_resize_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    int i;
+    if (w == NULL)
+        return;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-Z") == 0) {   /* toggle zoom */
+            window_toggle_zoom(w);
+            mark(s, 1);
+            return;
+        }
+    }
+    for (i = 1; i < argc; i++) {
+        int dir = -1;
+        if      (strcmp(argv[i], "-L") == 0) dir = DIR_LEFT;
+        else if (strcmp(argv[i], "-R") == 0) dir = DIR_RIGHT;
+        else if (strcmp(argv[i], "-U") == 0) dir = DIR_UP;
+        else if (strcmp(argv[i], "-D") == 0) dir = DIR_DOWN;
+        if (dir >= 0) {
+            int amount = 1;
+            if (i + 1 < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
+                amount = atoi(argv[i + 1]);
+                i++;
+            }
+            window_resize_active(w, dir, amount);
+            mark(s, 1);
+        }
+    }
+}
+
+static void cmd_select_layout(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    if (w == NULL)
+        return;
+    if (argc > 1) {
+        int p = layout_preset_from_name(argv[1]);
+        if (p >= 0) { window_set_layout(w, p); mark(s, 1); }
+    } else {
+        window_next_layout(w);
+        mark(s, 1);
+    }
+}
+
+static void cmd_next_layout(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w) { window_next_layout(w); mark(s, 1); }
+}
+
 static void cmd_next_window(session_t *s, int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -340,6 +395,9 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "new-window",      cmd_new_window },
     { "split-window",    cmd_split_window },
     { "select-pane",     cmd_select_pane },
+    { "resize-pane",     cmd_resize_pane },
+    { "select-layout",   cmd_select_layout },
+    { "next-layout",     cmd_next_layout },
     { "kill-pane",       cmd_kill_pane },
     { "next-window",     cmd_next_window },
     { "previous-window", cmd_prev_window },
@@ -396,6 +454,31 @@ static void handle_prefix(session_t *s, unsigned char c)
     run_key(s, (int)c);
 }
 
+/* Decode a completed CSI arrow sequence (after the prefix) into a bound key.
+ * The second CSI parameter carries the modifier: ";5"=Ctrl, ";3"=Alt. */
+static void handle_csi_final(session_t *s, unsigned char final)
+{
+    int base, mod = 0, keyid = 0;
+    s->csi[s->csilen] = '\0';
+    switch (final) {
+        case 'A': base = 0; break;   /* Up    */
+        case 'B': base = 1; break;   /* Down  */
+        case 'C': base = 2; break;   /* Right */
+        case 'D': base = 3; break;   /* Left  */
+        default:  return;            /* e.g. '~' — not bound after prefix */
+    }
+    if (strstr(s->csi, ";5") || strstr(s->csi, ";6")) mod = 1;       /* Ctrl */
+    else if (strstr(s->csi, ";3") || strstr(s->csi, ";4")) mod = 2;  /* Alt  */
+
+    switch (base) {
+        case 0: keyid = (mod == 1) ? KEY_C_UP    : (mod == 2) ? KEY_M_UP    : KEY_UP;    break;
+        case 1: keyid = (mod == 1) ? KEY_C_DOWN  : (mod == 2) ? KEY_M_DOWN  : KEY_DOWN;  break;
+        case 2: keyid = (mod == 1) ? KEY_C_RIGHT : (mod == 2) ? KEY_M_RIGHT : KEY_RIGHT; break;
+        case 3: keyid = (mod == 1) ? KEY_C_LEFT  : (mod == 2) ? KEY_M_LEFT  : KEY_LEFT;  break;
+    }
+    run_key(s, keyid);
+}
+
 /* Install the default tmux-like key bindings. */
 static void install_default_bindings(session_t *s)
 {
@@ -413,11 +496,21 @@ static void install_default_bindings(session_t *s)
     bind_set(s, '[',  "copy-mode");
     bind_set(s, 'd',  "detach-client");
     bind_set(s, ':',  "command-prompt");
+    bind_set(s, 'z',  "resize-pane -Z");
+    bind_set(s, ' ',  "next-layout");
     bind_set(s, s->prefix_key, "send-prefix");
     bind_set(s, KEY_UP,    "select-pane -U");
     bind_set(s, KEY_DOWN,  "select-pane -D");
     bind_set(s, KEY_LEFT,  "select-pane -L");
     bind_set(s, KEY_RIGHT, "select-pane -R");
+    bind_set(s, KEY_C_UP,    "resize-pane -U 1");
+    bind_set(s, KEY_C_DOWN,  "resize-pane -D 1");
+    bind_set(s, KEY_C_LEFT,  "resize-pane -L 1");
+    bind_set(s, KEY_C_RIGHT, "resize-pane -R 1");
+    bind_set(s, KEY_M_UP,    "resize-pane -U 5");
+    bind_set(s, KEY_M_DOWN,  "resize-pane -D 5");
+    bind_set(s, KEY_M_LEFT,  "resize-pane -L 5");
+    bind_set(s, KEY_M_RIGHT, "resize-pane -R 5");
     for (i = 0; i <= 9; i++) {
         _snprintf_s(name, sizeof(name), _TRUNCATE, "%d", i);
         _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "select-window -t %d", i);
@@ -527,22 +620,17 @@ void session_input(session_t *s, const char *bytes, size_t n)
                 handle_prefix(s, c);
                 break;
             case PS_ESC:
-                s->pstate = (c == '[') ? PS_CSI : PS_NORMAL;
+                if (c == '[') { s->csilen = 0; s->pstate = PS_CSI; }
+                else            s->pstate = PS_NORMAL;
                 break;
-            case PS_CSI: {
-                int keyid = 0;
-                switch (c) {
-                    case 'A': keyid = KEY_UP;    break;
-                    case 'B': keyid = KEY_DOWN;  break;
-                    case 'C': keyid = KEY_RIGHT; break;
-                    case 'D': keyid = KEY_LEFT;  break;
-                    default: break;
+            case PS_CSI:
+                if (c >= 0x40 && c <= 0x7e) {          /* final byte */
+                    handle_csi_final(s, c);
+                    s->pstate = PS_NORMAL;
+                } else if (s->csilen < (int)sizeof(s->csi) - 1) {
+                    s->csi[s->csilen++] = (char)c;     /* parameter/intermediate */
                 }
-                if (keyid)
-                    run_key(s, keyid);
-                s->pstate = PS_NORMAL;
                 break;
-            }
         }
     }
 

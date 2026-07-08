@@ -161,6 +161,79 @@ static void test_remove(void)
     free_pane(a); free_pane(b);
 }
 
+static void test_resize(void)
+{
+    pane_t *a = make_pane(1), *b = make_pane(2);
+    layout_node_t *root = layout_leaf(a);
+    layout_split(&root, root, LN_SPLIT_V, b);   /* a | b */
+    layout_apply(root, 0, 0, 80, 24);
+    CHECK(a->cols == 40, "resize: initial left width 40");
+
+    /* Grow the left pane rightward by 5 cells. */
+    CHECK(layout_resize(root, a, DIR_RIGHT, 5) == 1, "resize -R reports change");
+    layout_apply(root, 0, 0, 80, 24);
+    CHECK(a->cols == 45, "resize -R grows left pane to 45");
+    CHECK(a->cols + 1 + b->cols == 80, "resize keeps widths consistent");
+
+    /* The leftmost pane cannot grow further left (no divider there). */
+    CHECK(layout_resize(root, a, DIR_LEFT, 5) == 0, "resize -L on leftmost is a no-op");
+    /* Growing b leftward shrinks a. */
+    CHECK(layout_resize(root, b, DIR_LEFT, 5) == 1, "resize -L on right pane changes");
+    layout_apply(root, 0, 0, 80, 24);
+    CHECK(a->cols == 40, "b grew left, a back to 40");
+
+    layout_free(root, 0);
+    free_pane(a); free_pane(b);
+}
+
+static void test_presets(void)
+{
+    pane_t *a = make_pane(1), *b = make_pane(2), *c = make_pane(3), *d = make_pane(4);
+    layout_node_t *root = layout_leaf(a);
+    layout_node_t *lb, *lc;
+    pane_t *ps[8];
+    int n, i;
+
+    lb = layout_split(&root, root, LN_SPLIT_V, b)->b;
+    lc = layout_split(&root, lb, LN_SPLIT_V, c)->b;
+    layout_split(&root, lc, LN_SPLIT_H, d);
+    CHECK(layout_count(root) == 4, "presets: 4 panes to start");
+
+    /* even-horizontal: one row, every pane full height. */
+    CHECK(layout_set_preset(&root, LAYOUT_EVEN_H) == 1, "set even-horizontal");
+    layout_apply(root, 0, 0, 80, 24);
+    n = layout_collect(root, ps, 8);
+    CHECK(n == 4, "even-h keeps 4 panes");
+    { int ok = 1; for (i = 0; i < n; i++) if (ps[i]->rows != 24) ok = 0;
+      CHECK(ok, "even-h: all panes full height"); }
+
+    /* even-vertical: one column, every pane full width. */
+    CHECK(layout_set_preset(&root, LAYOUT_EVEN_V) == 1, "set even-vertical");
+    layout_apply(root, 0, 0, 80, 24);
+    n = layout_collect(root, ps, 8);
+    { int ok = 1; for (i = 0; i < n; i++) if (ps[i]->cols != 80) ok = 0;
+      CHECK(ok, "even-v: all panes full width"); }
+
+    /* main-vertical: first pane on the left, full height. */
+    CHECK(layout_set_preset(&root, LAYOUT_MAIN_V) == 1, "set main-vertical");
+    layout_apply(root, 0, 0, 80, 24);
+    n = layout_collect(root, ps, 8);
+    CHECK(ps[0]->x == 0 && ps[0]->rows == 24, "main-v: main pane spans left column");
+    CHECK(ps[1]->x == ps[2]->x && ps[2]->x == ps[3]->x && ps[1]->x > 0,
+          "main-v: the rest share the right column");
+
+    /* tiled: still all four panes, no crash. */
+    CHECK(layout_set_preset(&root, LAYOUT_TILED) == 1, "set tiled");
+    layout_apply(root, 0, 0, 80, 24);
+    CHECK(layout_count(root) == 4, "tiled keeps 4 panes");
+
+    CHECK(layout_preset_from_name("tiled") == LAYOUT_TILED, "preset name -> id");
+    CHECK(layout_preset_from_name("bogus") == -1, "unknown preset name -> -1");
+
+    layout_free(root, 0);
+    free_pane(a); free_pane(b); free_pane(c); free_pane(d);
+}
+
 int main(void)
 {
     test_single_leaf();
@@ -169,6 +242,8 @@ int main(void)
     test_traversal();
     test_directional();
     test_remove();
+    test_resize();
+    test_presets();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);
