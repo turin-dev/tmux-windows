@@ -19,6 +19,7 @@ typedef struct copymode {
     int      cur_line;
     int      cur_col;
     int      sel;          /* a selection is in progress */
+    int      sel_mode;     /* 0 = characterwise, 1 = linewise, 2 = block */
     int      anchor_line;
     int      anchor_col;
     int      esc;          /* input parser: 0 normal, 1 after ESC, 2 in CSI */

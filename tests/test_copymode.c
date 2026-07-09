@@ -187,6 +187,36 @@ static void test_motions(void)
     free_pane(p);
 }
 
+static void test_visual_modes(void)
+{
+    pane_t *p = make_pane(10, 3);
+    copymode_t cm;
+
+    screen_write(p->screen, "AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE", 28);
+    copymode_enter(&cm, p);
+    feed(&cm, "g", NULL);              /* top line 0 */
+
+    /* Linewise: V then down selects whole lines 0 and 1. */
+    feed(&cm, "V", NULL);
+    feed(&cm, "j", NULL);
+    CHECK(copymode_selected(&cm, 0, 9) == 1, "linewise selects far column of line 0");
+    CHECK(copymode_selected(&cm, 1, 0) == 1, "linewise selects line 1");
+    CHECK(copymode_selected(&cm, 2, 0) == 0, "linewise stops at line 1");
+    feed(&cm, "V", NULL);             /* toggle off */
+    CHECK(copymode_selected(&cm, 0, 0) == 0, "V again clears the selection");
+
+    /* Block: Ctrl-V, move down+right, only the rectangle is selected. */
+    feed(&cm, "g", NULL);
+    feed(&cm, "\x16", NULL);          /* Ctrl-V at (0,0) */
+    feed(&cm, "j", NULL);             /* -> line 1 */
+    feed(&cm, "l", NULL);             /* -> col 1 */
+    CHECK(copymode_selected(&cm, 0, 0) == 1, "block includes anchor corner");
+    CHECK(copymode_selected(&cm, 1, 1) == 1, "block includes opposite corner");
+    CHECK(copymode_selected(&cm, 0, 5) == 0, "block excludes columns outside the rect");
+
+    free_pane(p);
+}
+
 int main(void)
 {
     test_enter_and_scroll();
@@ -195,6 +225,7 @@ int main(void)
     test_arrow_keys();
     test_search();
     test_motions();
+    test_visual_modes();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);

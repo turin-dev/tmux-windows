@@ -92,7 +92,16 @@ static void extract(copymode_t *cm, strbuf_t *text)
     int cols = vp_cols(cm);
     int l0, c0, l1, c1, line;
 
-    if (cm->sel) {
+    if (cm->sel && cm->sel_mode == 1) {                 /* linewise */
+        l0 = cm->anchor_line < cm->cur_line ? cm->anchor_line : cm->cur_line;
+        l1 = cm->anchor_line > cm->cur_line ? cm->anchor_line : cm->cur_line;
+        c0 = 0; c1 = cols - 1;
+    } else if (cm->sel && cm->sel_mode == 2) {          /* block */
+        l0 = cm->anchor_line < cm->cur_line ? cm->anchor_line : cm->cur_line;
+        l1 = cm->anchor_line > cm->cur_line ? cm->anchor_line : cm->cur_line;
+        c0 = cm->anchor_col < cm->cur_col ? cm->anchor_col : cm->cur_col;
+        c1 = cm->anchor_col > cm->cur_col ? cm->anchor_col : cm->cur_col;
+    } else if (cm->sel) {                               /* characterwise */
         l0 = cm->anchor_line; c0 = cm->anchor_col;
         l1 = cm->cur_line;    c1 = cm->cur_col;
         order(&l0, &c0, &l1, &c1);
@@ -103,8 +112,9 @@ static void extract(copymode_t *cm, strbuf_t *text)
 
     strbuf_clear(text);
     for (line = l0; line <= l1; line++) {
-        int startc = (line == l0) ? c0 : 0;
-        int endc = (line == l1) ? c1 : cols - 1;
+        int block = (cm->sel && cm->sel_mode == 2);
+        int startc = block ? c0 : ((line == l0) ? c0 : 0);
+        int endc   = block ? c1 : ((line == l1) ? c1 : cols - 1);
         strbuf_t ln;
         int col, i, trim;
         strbuf_init(&ln);
@@ -273,6 +283,7 @@ static int action(copymode_t *cm, int what, strbuf_t *text)
         case ' ':
             if (!cm->sel) {
                 cm->sel = 1;
+                cm->sel_mode = 0;
                 cm->anchor_line = cm->cur_line;
                 cm->anchor_col = cm->cur_col;
             } else {
@@ -367,6 +378,16 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
         if (c == 'N') { do_search(cm, cm->search_dir ? -cm->search_dir : -1); continue; }
         if (c == 0x15) { move(cm, -(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-U: half up */
         if (c == 0x04) { move(cm, +(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-D: half down */
+        if (c == 'V') {                       /* linewise visual toggle */
+            if (cm->sel && cm->sel_mode == 1) cm->sel = 0;
+            else { cm->sel = 1; cm->sel_mode = 1; cm->anchor_line = cm->cur_line; cm->anchor_col = cm->cur_col; }
+            continue;
+        }
+        if (c == 0x16) {                      /* Ctrl-V: block visual toggle */
+            if (cm->sel && cm->sel_mode == 2) cm->sel = 0;
+            else { cm->sel = 1; cm->sel_mode = 2; cm->anchor_line = cm->cur_line; cm->anchor_col = cm->cur_col; }
+            continue;
+        }
 
         {
             int a = 0;
@@ -420,7 +441,21 @@ int copymode_selected(const copymode_t *cm, int line, int col)
     int l0, c0, l1, c1;
     if (!cm->sel)
         return 0;
-    l0 = cm->anchor_line; c0 = cm->anchor_col;
+
+    if (cm->sel_mode == 1) {                     /* linewise */
+        int lo = cm->anchor_line < cm->cur_line ? cm->anchor_line : cm->cur_line;
+        int hi = cm->anchor_line > cm->cur_line ? cm->anchor_line : cm->cur_line;
+        return line >= lo && line <= hi;
+    }
+    if (cm->sel_mode == 2) {                     /* block */
+        int lo = cm->anchor_line < cm->cur_line ? cm->anchor_line : cm->cur_line;
+        int hi = cm->anchor_line > cm->cur_line ? cm->anchor_line : cm->cur_line;
+        int cl = cm->anchor_col < cm->cur_col ? cm->anchor_col : cm->cur_col;
+        int cr = cm->anchor_col > cm->cur_col ? cm->anchor_col : cm->cur_col;
+        return line >= lo && line <= hi && col >= cl && col <= cr;
+    }
+
+    l0 = cm->anchor_line; c0 = cm->anchor_col;   /* characterwise */
     l1 = cm->cur_line;    c1 = cm->cur_col;
     order(&l0, &c0, &l1, &c1);
     if (line < l0 || line > l1)

@@ -141,7 +141,9 @@ Scroll back through a pane's history and copy text to the Windows clipboard:
 | `g` / `G`               | jump to top / bottom of history        |
 | `/` / `?`               | search forward / backward              |
 | `n` / `N`               | repeat search, same / opposite way     |
-| `Space` / `v`           | start / clear a selection              |
+| `Space` / `v`           | start / clear a characterwise selection |
+| `V`                     | linewise selection                     |
+| `Ctrl-V`                | rectangle (block) selection            |
 | `Enter` or `y`          | copy the selection and exit            |
 | `q` / `Esc`             | cancel                                 |
 
