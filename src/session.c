@@ -53,6 +53,7 @@ struct session {
     int             status_on;
     int             base_index;       /* first window number shown/selected */
     int             pane_base_index;  /* first pane number for select-pane -t */
+    int             show_panes;       /* display-panes overlay ticks remaining */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -531,6 +532,13 @@ static void cmd_source(session_t *s, int argc, char **argv)
     if (argc > 1) session_load_config_path(s, argv[1]);
 }
 
+static void cmd_display_panes(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    s->show_panes = 40;   /* ~2s at the ~50ms serve tick, or until a key */
+    mark(s, 1);
+}
+
 static void cmd_command_prompt(session_t *s, int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -574,6 +582,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "unbind-key",      cmd_unbind },
     { "source-file",     cmd_source },
     { "command-prompt",  cmd_command_prompt },
+    { "display-panes",   cmd_display_panes },
 };
 
 static void run_argv(session_t *s, int argc, char **argv)
@@ -768,6 +777,7 @@ static void install_default_bindings(session_t *s)
     bind_set(s, '[',  "copy-mode");
     bind_set(s, 'd',  "detach-client");
     bind_set(s, ':',  "command-prompt");
+    bind_set(s, 'q',  "display-panes");
     bind_set(s, 'z',  "resize-pane -Z");
     bind_set(s, ' ',  "next-layout");
     bind_set(s, '{',  "swap-pane -U");
@@ -864,6 +874,18 @@ void session_input(session_t *s, const char *bytes, size_t n)
                 s->prompt[s->prompt_len++] = (char)c;
             }
         }
+        mark(s, 1);
+        return;
+    }
+
+    /* While the pane-number overlay is up, the next key dismisses it; a digit
+     * also selects that pane. */
+    if (s->show_panes > 0 && n > 0) {
+        unsigned char c = (unsigned char)bytes[0];
+        window_t *w = cur_window(s);
+        s->show_panes = 0;
+        if (w && c >= '0' && c <= '9')
+            window_select_index(w, (int)(c - '0') - s->pane_base_index);
         mark(s, 1);
         return;
     }
@@ -969,6 +991,8 @@ void session_tick(session_t *s)
         s->last_min = (int)st.wMinute;
         s->changed = 1;
     }
+    if (s->show_panes > 0 && --s->show_panes == 0)
+        mark(s, 1);            /* overlay expired: repaint to clear it */
 }
 
 static void render_status(session_t *s, strbuf_t *frame)
@@ -1019,6 +1043,8 @@ void session_render(session_t *s, strbuf_t *frame)
     if (s->status_on)
         render_status(s, frame);       /* draw bar first */
     window_render(frame, w, s->full_redraw, &s->copy); /* panes + cursor last */
+    if (s->show_panes > 0)
+        window_display_panes(frame, w, s->pane_base_index);
     if (s->prompt_active)
         render_prompt(s, frame);       /* prompt overrides the bar + cursor */
 

@@ -101,6 +101,7 @@ reattach separately and `tmux ls` enumerates them.
 | `Ctrl-B ←↑↓→`  | select pane by direction        |
 | `Ctrl-B Ctrl-←↑↓→` | resize active pane (1 cell) |
 | `Ctrl-B Alt-←↑↓→`  | resize active pane (5 cells)|
+| `Ctrl-B q`     | show pane numbers (digit selects) |
 | `Ctrl-B z`     | zoom / unzoom active pane       |
 | `Ctrl-B Space` | cycle layout preset             |
 | `Ctrl-B {` / `}` | swap pane with prev / next    |
@@ -162,7 +163,7 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
 `select-window -t N`, `kill-window`, `rename-window <name>`,
 `rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
-`send-keys <keys...>`, `command-prompt`, `set <option> <value>`,
+`send-keys <keys...>`, `display-panes`, `command-prompt`, `set <option> <value>`,
 `bind <key> <command>`, `unbind <key>`, `source-file <path>`.
 
 Multiple commands can be chained on one line (in a binding, config, or prompt)

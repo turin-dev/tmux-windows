@@ -101,4 +101,8 @@ int       window_empty(const window_t *w);
 void      window_render(strbuf_t *frame, window_t *w, int full_redraw,
                         const copymode_t *cm);
 
+/* Overlay each pane's number (starting at `base`) centred in reverse video,
+ * for display-panes. */
+void      window_display_panes(strbuf_t *frame, window_t *w, int base);
+
 #endif /* TMUXW_MODEL_WINDOW_H */

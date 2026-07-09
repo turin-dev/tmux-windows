@@ -742,6 +742,38 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* display-panes overlays each pane's number until a key dismisses it. */
+static int run_selftest_display(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(300);
+    session_pump(s);
+
+    session_run(s, "split-window -h");   /* panes 0 and 1 */
+    session_run(s, "display-panes");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, " 0 ") == NULL) { printf("FAIL: pane 0 number not shown\n"); ok = 0; }
+    if (strstr(frame.data, " 1 ") == NULL) { printf("FAIL: pane 1 number not shown\n"); ok = 0; }
+
+    printf("%s\n", ok ? "DISPLAY SELFTEST PASSED" : "DISPLAY SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* send-keys types into the active pane; a ';' separates chained commands. */
 static int run_selftest_sendkeys(void)
 {
@@ -848,6 +880,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_options();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-sendkeys") == 0)
         return run_selftest_sendkeys();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-display") == 0)
+        return run_selftest_display();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

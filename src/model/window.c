@@ -3,6 +3,7 @@
 
 #include "render.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -415,4 +416,26 @@ void window_render(strbuf_t *frame, window_t *w, int full_redraw,
     /* In copy mode the copy renderer already placed the cursor. */
     if (!copy_on_active)
         render_active_cursor(frame, w->active);
+}
+
+void window_display_panes(strbuf_t *frame, window_t *w, int base)
+{
+    pane_t *leaves[TMUXW_MAX_PANES];
+    int count, i;
+    if (w->root == NULL)
+        return;
+    count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+    for (i = 0; i < count; i++) {
+        pane_t *p = leaves[i];
+        char label[16];
+        int len, row, col;
+        _snprintf_s(label, sizeof(label), _TRUNCATE, " %d ", i + base);
+        len = (int)strlen(label);
+        row = p->y + p->rows / 2;
+        col = p->x + (p->cols - len) / 2;
+        if (col < p->x) col = p->x;
+        /* Bright reverse-video number, emphasised on the active pane. */
+        strbuf_printf(frame, "\x1b[%d;%dH\x1b[7m%s%s\x1b[0m",
+                      row + 1, col + 1, (p == w->active) ? "\x1b[1m" : "", label);
+    }
 }
