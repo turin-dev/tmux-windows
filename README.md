@@ -170,8 +170,9 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `select-window -t N`, `swap-window [-s a] -t b`, `kill-window`,
 `rename-window <name>`,
 `rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
-`send-keys <keys...>`, `display-panes`, `clock-mode`, `command-prompt`,
-`set <option> <value>`,
+`send-keys <keys...>`, `display-panes`, `display-message <text>`,
+`run-shell <cmd>`, `if-shell <cond> <then> [else]`, `clock-mode`,
+`command-prompt`, `set <option> <value>`,
 `bind <key> <command>`, `unbind <key>`, `source-file <path>`.
 
 Multiple commands can be chained on one line (in a binding, config, or prompt)

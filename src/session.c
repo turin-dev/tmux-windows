@@ -61,6 +61,8 @@ struct session {
     int             show_panes;       /* display-panes overlay ticks remaining */
     int             clock_mode;       /* big-clock overlay active */
     int             repeat_ticks;     /* -r repeat window remaining */
+    char            message[160];     /* transient status message */
+    int             message_ticks;    /* display-message ticks remaining */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -81,6 +83,70 @@ struct session {
 
 static void session_run_command(session_t *s, const char *line);
 static void session_load_config_path(session_t *s, const char *path);
+static void expand_status(session_t *s, const char *fmt, char *out, size_t cap);
+
+/* Run `cmdline` through cmd.exe, capturing up to cap-1 bytes of stdout into
+ * `out` and the process exit code into *code. Returns 0 on success. Blocks. */
+static int capture_command(const char *cmdline, char *out, size_t cap, DWORD *code)
+{
+    HANDLE rd = NULL, wr = NULL;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char full[1024];
+    DWORD total = 0;
+
+    if (out && cap) out[0] = '\0';
+    if (code) *code = (DWORD)-1;
+
+    ZeroMemory(&sa, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&rd, &wr, &sa, 0))
+        return 1;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = wr;
+    si.hStdError = wr;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    ZeroMemory(&pi, sizeof(pi));
+
+    _snprintf_s(full, sizeof(full), _TRUNCATE, "cmd.exe /c %s", cmdline);
+    if (!CreateProcessA(NULL, full, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(rd); CloseHandle(wr);
+        return 1;
+    }
+    CloseHandle(wr);   /* parent keeps only the read end */
+
+    if (out && cap > 1) {
+        for (;;) {
+            DWORD got = 0;
+            if (!ReadFile(rd, out + total, (DWORD)(cap - 1 - total), &got, NULL) || got == 0)
+                break;
+            total += got;
+            if (total >= cap - 1) break;
+        }
+        out[total] = '\0';
+    }
+    CloseHandle(rd);
+    WaitForSingleObject(pi.hProcess, 10000);
+    if (code) GetExitCodeProcess(pi.hProcess, code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return 0;
+}
+
+/* Trim a captured buffer to its first line (for status display). */
+static void first_line(char *s)
+{
+    char *p = s;
+    while (*p && *p != '\r' && *p != '\n') p++;
+    *p = '\0';
+}
 
 /* ----- big-digit clock (clock-mode) ----------------------------------------- */
 
@@ -663,6 +729,45 @@ static void cmd_display_panes(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+static void show_message(session_t *s, const char *text)
+{
+    strncpy_s(s->message, sizeof(s->message), text, _TRUNCATE);
+    s->message_ticks = 40;    /* ~2s */
+    mark(s, 1);
+}
+
+static void cmd_display_message(session_t *s, int argc, char **argv)
+{
+    char out[160];
+    if (argc < 2)
+        return;
+    expand_status(s, argv[1], out, sizeof(out));   /* #S/#W/%H etc. */
+    show_message(s, out);
+}
+
+static void cmd_run_shell(session_t *s, int argc, char **argv)
+{
+    char out[512];
+    if (argc < 2)
+        return;
+    if (capture_command(argv[1], out, sizeof(out), NULL) == 0 && out[0]) {
+        first_line(out);
+        show_message(s, out);
+    }
+}
+
+static void cmd_if_shell(session_t *s, int argc, char **argv)
+{
+    DWORD code = (DWORD)-1;
+    if (argc < 3)
+        return;
+    capture_command(argv[1], NULL, 0, &code);
+    if (code == 0)
+        session_run_command(s, argv[2]);        /* condition succeeded */
+    else if (argc > 3)
+        session_run_command(s, argv[3]);        /* else branch */
+}
+
 static void cmd_clock_mode(session_t *s, int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -716,6 +821,9 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "source-file",     cmd_source },
     { "command-prompt",  cmd_command_prompt },
     { "display-panes",   cmd_display_panes },
+    { "display-message", cmd_display_message },
+    { "run-shell",       cmd_run_shell },
+    { "if-shell",        cmd_if_shell },
     { "clock-mode",      cmd_clock_mode },
 };
 
@@ -1153,6 +1261,8 @@ void session_tick(session_t *s)
         mark(s, 1);            /* overlay expired: repaint to clear it */
     if (s->repeat_ticks > 0)
         s->repeat_ticks--;     /* close the -r window over time */
+    if (s->message_ticks > 0 && --s->message_ticks == 0)
+        mark(s, 1);            /* message expired: repaint the status bar */
 }
 
 /* Expand a status format string into `out`: #S session, #W/#I current window,
@@ -1223,6 +1333,16 @@ static void render_status(session_t *s, strbuf_t *frame)
     status_render(frame, s->cols, s->rows, left, wins, s->nwindows, right);
 }
 
+/* Draw a transient message across the status row (reverse video, full width). */
+static void render_message(session_t *s, strbuf_t *frame)
+{
+    int i, len = (int)strlen(s->message);
+    strbuf_printf(frame, "\x1b[%d;1H\x1b[7m", s->rows);
+    for (i = 0; i < s->cols; i++)
+        strbuf_putc(frame, i < len ? s->message[i] : ' ');
+    strbuf_append(frame, "\x1b[0m", 4);
+}
+
 /* Render the command prompt line at the bottom row (cursor after the text). */
 static void render_prompt(session_t *s, strbuf_t *frame)
 {
@@ -1259,6 +1379,8 @@ void session_render(session_t *s, strbuf_t *frame)
     }
     if (s->show_panes > 0)
         window_display_panes(frame, w, s->pane_base_index);
+    if (s->message_ticks > 0)
+        render_message(s, frame);      /* transient message over the status row */
     if (s->prompt_active)
         render_prompt(s, frame);       /* prompt overrides the bar + cursor */
 

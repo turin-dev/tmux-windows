@@ -751,6 +751,47 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* display-message shows text on the status row; run-shell/if-shell run cmd.exe. */
+static int run_selftest_shell(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "display-message HELLO_MSG");
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "HELLO_MSG") == NULL) { printf("FAIL: display-message not shown\n"); ok = 0; }
+
+    session_run(s, "run-shell \"echo RUNSHELL_OK\"");
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "RUNSHELL_OK") == NULL) { printf("FAIL: run-shell output not shown\n"); ok = 0; }
+
+    session_run(s, "if-shell \"exit 0\" \"display-message IFYES\"");
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "IFYES") == NULL) { printf("FAIL: if-shell then-branch not run\n"); ok = 0; }
+
+    session_run(s, "if-shell \"exit 1\" \"display-message NOPE\" \"display-message IFNO\"");
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "IFNO") == NULL) { printf("FAIL: if-shell else-branch not run\n"); ok = 0; }
+
+    printf("%s\n", ok ? "SHELL SELFTEST PASSED" : "SHELL SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* A -r binding repeats without the prefix during a short window. */
 static int run_selftest_repeat(void)
 {
@@ -981,6 +1022,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_clock();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-repeat") == 0)
         return run_selftest_repeat();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-shell") == 0)
+        return run_selftest_shell();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 
