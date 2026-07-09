@@ -161,7 +161,8 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
 `rotate-window [-U]`, `swap-pane [-U|-D]`, `break-pane`, `paste-buffer`,
 `last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
-`select-window -t N`, `kill-window`, `rename-window <name>`,
+`select-window -t N`, `swap-window [-s a] -t b`, `kill-window`,
+`rename-window <name>`,
 `rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
 `send-keys <keys...>`, `display-panes`, `command-prompt`, `set <option> <value>`,
 `bind <key> <command>`, `unbind <key>`, `source-file <path>`.
