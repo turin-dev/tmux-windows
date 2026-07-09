@@ -12,7 +12,7 @@
 ; The GitHub `windows-latest` runners ship Inno Setup, so CI builds this on tag.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.1"
+  #define AppVersion "0.2.0"
 #endif
 
 ; Where the built binaries live, relative to this script (../build by default).
