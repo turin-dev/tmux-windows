@@ -27,8 +27,10 @@ typedef struct window {
     char           name[64];       /* display name (derived from the shell) */
 } window_t;
 
-/* Create a window with one pane running `shell`. Returns NULL on failure. */
-window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake);
+/* Create a window with one pane running `shell`, starting in `cwd` (NULL/empty
+ * inherits the caller's current directory). Returns NULL on failure. */
+window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
+                        const wchar_t *cwd);
 void      window_free(window_t *w);
 
 /* Wrap an already-running pane in a fresh window (used by break-pane). Takes

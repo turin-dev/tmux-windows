@@ -28,9 +28,12 @@ typedef struct pane {
     int              has_conpty;
 } pane_t;
 
-/* Spawn `cmdline` in a cols x rows pseudo console and start the reader thread.
- * `wake` is signalled whenever new output arrives. Returns NULL on failure. */
-pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake);
+/* Spawn `cmdline` in a cols x rows pseudo console, starting in `cwd`
+ * (NULL/empty inherits the caller's current directory), and start the reader
+ * thread. `wake` is signalled whenever new output arrives. Returns NULL on
+ * failure. */
+pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake,
+                     const wchar_t *cwd);
 
 /* Stop the reader thread, close the pseudo console, free everything. */
 void    pane_close(pane_t *p);

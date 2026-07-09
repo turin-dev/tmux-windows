@@ -242,7 +242,7 @@ static void new_window(session_t *s)
     window_t *w;
     if (s->nwindows >= MAX_WINDOWS)
         return;
-    w = window_create(s->shell, s->cols, win_area_rows(s), s->wake);
+    w = window_create(s->shell, s->cols, win_area_rows(s), s->wake, NULL);
     if (w == NULL)
         return;
     s->windows[s->nwindows] = w;
@@ -1102,6 +1102,12 @@ static void install_default_bindings(session_t *s)
 
 session_t *session_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
 {
+    return session_create_in(shell, cols, rows, wake, NULL);
+}
+
+session_t *session_create_in(const wchar_t *shell, int cols, int rows, HANDLE wake,
+                              const wchar_t *cwd)
+{
     session_t *s;
     window_t *w;
     if (cols <= 0) cols = 80;
@@ -1123,7 +1129,7 @@ session_t *session_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
     strcpy_s(s->name, sizeof(s->name), "0");
     install_default_bindings(s);
 
-    w = window_create(shell, cols, win_area_rows(s), wake);
+    w = window_create(shell, cols, win_area_rows(s), wake, cwd);
     if (w == NULL) {
         free(s);
         return NULL;

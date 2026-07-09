@@ -21,6 +21,11 @@ typedef struct session session_t;
  * signalled by pane output (the caller waits on it). `shell` must outlive the
  * session. Returns NULL on failure. */
 session_t *session_create(const wchar_t *shell, int cols, int rows, HANDLE wake);
+
+/* Like session_create, but the initial pane starts in `cwd` (NULL/empty
+ * inherits the caller's current directory). */
+session_t *session_create_in(const wchar_t *shell, int cols, int rows, HANDLE wake,
+                              const wchar_t *cwd);
 void       session_free(session_t *s);
 
 /* Feed host input bytes through the prefix state machine, routing ordinary

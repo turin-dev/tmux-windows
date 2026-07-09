@@ -4,15 +4,22 @@
  * one if needed, and attaches as a thin client. The server owns all panes and
  * survives detach (Ctrl-B d); reattaching resumes the session.
  *
- *   tmux                         attach to (or start) the default session
- *   tmux new [-s name] [cmd]     start a session (alias: new-session) and attach
- *   tmux attach [-t name]        attach to an existing session (alias: a)
- *   tmux --standalone [cmd]      run a session in one process (no server; debug)
- *   tmux --server <pipe> [cmd]   internal: the background server process
- *   tmux --selftest [cmd]        headless: ConPTY output straight to stdout
- *   tmux --selftest-render [cmd] headless: ConPTY -> libvterm -> dump grid
- *   tmux --selftest-split        headless: two panes + compositor
- *   tmux --selftest-ipc          headless: full server/client round trip
+ *   tmux                                  attach to (or start) the default session
+ *   tmux new [-s name] [-c dir] [-x w -y h] [-d] [cmd]
+ *                                         start a session (alias: new-session);
+ *                                         -d starts it without attaching
+ *   tmux attach [-t name]                 attach to an existing session (alias: a)
+ *   tmux has-session [-t name]            exit 0 if the session is running (alias: has)
+ *   tmux kill-session [-t name] [-a]      stop one session's server, or (-a) every
+ *                                         other one
+ *   tmux -V | --version                   print the version
+ *   tmux --standalone [cmd]               run a session in one process (no server; debug)
+ *   tmux --server <pipe> [--cwd dir] [--size WxH] [cmd]
+ *                                         internal: the background server process
+ *   tmux --selftest [cmd]                 headless: ConPTY output straight to stdout
+ *   tmux --selftest-render [cmd]          headless: ConPTY -> libvterm -> dump grid
+ *   tmux --selftest-split                 headless: two panes + compositor
+ *   tmux --selftest-ipc                   headless: full server/client round trip
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
  */
@@ -182,10 +189,12 @@ static int spawn_via_scheduled_task(const wchar_t *cmd)
  * Because (3) launches the process via the Schedule service rather than as
  * our own child, no process handle is available for it; *out_process is set
  * to NULL in that case. */
-static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell, HANDLE *out_process)
+static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell,
+                           const wchar_t *cwd, int cols, int rows, HANDLE *out_process)
 {
     wchar_t exe[MAX_PATH];
     wchar_t cmd[CMD_MAX];
+    wchar_t extra[MAX_PATH + 64];
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     DWORD flags = CREATE_NO_WINDOW | DETACHED_PROCESS;
@@ -195,7 +204,18 @@ static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell, HANDLE
     if (GetModuleFileNameW(NULL, exe, MAX_PATH) == 0)
         return (int)GetLastError();
 
-    _snwprintf_s(cmd, CMD_MAX, _TRUNCATE, L"\"%s\" --server %s %s", exe, pipename, shell);
+    extra[0] = L'\0';
+    if (cwd && cwd[0]) {
+        wchar_t part[MAX_PATH + 16];
+        _snwprintf_s(part, MAX_PATH + 16, _TRUNCATE, L"--cwd \"%s\" ", cwd);
+        wcscat_s(extra, MAX_PATH + 64, part);
+    }
+    if (cols > 0 && rows > 0) {
+        wchar_t part[64];
+        _snwprintf_s(part, 64, _TRUNCATE, L"--size %dx%d ", cols, rows);
+        wcscat_s(extra, MAX_PATH + 64, part);
+    }
+    _snwprintf_s(cmd, CMD_MAX, _TRUNCATE, L"\"%s\" --server %s %s%s", exe, pipename, extra, shell);
 
     if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job))
         in_job = FALSE;
@@ -231,15 +251,14 @@ static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell, HANDLE
     return 0;
 }
 
-static int spawn_server(const wchar_t *pipename, const wchar_t *shell)
-{
-    return spawn_server_ex(pipename, shell, NULL);
-}
-
 /* Attach to session `name` (NULL/empty -> "default") as a thin client. If no
- * server is running: when start_if_missing is set, spawn one running `shell`;
- * otherwise fail (the `attach` command must not create sessions). */
-static int attach_session(const wchar_t *name, const wchar_t *shell, int start_if_missing)
+ * server is running: when start_if_missing is set, spawn one running `shell`
+ * (starting in `cwd`, at `cols` x `rows` if given); otherwise fail (the
+ * `attach` command must not create sessions). If `start_detached` is set
+ * (new-session -d), the server is started/left running but this returns
+ * without attaching a client, mirroring tmux's `-d`. */
+static int attach_session(const wchar_t *name, const wchar_t *shell, int start_if_missing,
+                          const wchar_t *cwd, int cols, int rows, int start_detached)
 {
     wchar_t pipename[512];
     HANDLE pipe;
@@ -254,42 +273,74 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
                     (name && name[0]) ? name : L"default");
             return 1;
         }
-        rc = spawn_server(pipename, shell);
+        rc = spawn_server_ex(pipename, shell, cwd, cols, rows, NULL);
         if (rc != 0) {
             fprintf(stderr, "tmux: failed to start server (error %d)\n", rc);
             return 1;
+        }
+        if (start_detached) {
+            /* Wait for the pipe to come up so a following `tmux ls` reliably
+             * sees it, then return without attaching a client. */
+            pipe = ipc_client_connect(pipename, 5000);
+            if (pipe != INVALID_HANDLE_VALUE)
+                CloseHandle(pipe);
+            return 0;
         }
         pipe = ipc_client_connect(pipename, 5000);
         if (pipe == INVALID_HANDLE_VALUE) {
             fprintf(stderr, "tmux: could not connect to server\n");
             return 1;
         }
+    } else if (start_detached) {
+        CloseHandle(pipe);   /* session already running; -d is a no-op here */
+        return 0;
     }
     return run_client(pipe);
 }
 
-/* Parse client-subcommand arguments starting at argv[start]: a `-s`/`-t name`
- * target and any remaining tokens joined as the command to run. `name` and
- * `shell` are always NUL-terminated; *has_shell reports whether a command was
- * given. */
-static void parse_target_and_shell(int argc, wchar_t **argv, int start,
-                                   wchar_t *name, size_t name_cap,
-                                   wchar_t *shell, size_t shell_cap,
-                                   int *has_shell)
+/* Parsed arguments for a client subcommand (new-session, attach, kill-session,
+ * has-session, ...): a `-s`/`-t` target, `-c` start directory, `-x`/`-y`
+ * initial size, `-d` (start detached / detach other clients, depending on the
+ * command), `-a` (command-specific "all"), `-n` (initial window name --
+ * parsed but not yet applied), and any remaining tokens joined as the command
+ * to run. All string fields are always NUL-terminated. */
+typedef struct {
+    wchar_t name[256];
+    wchar_t cwd[MAX_PATH];
+    wchar_t winname[64];
+    wchar_t shell[CMD_MAX];
+    int     has_shell;
+    int     cols, rows;   /* 0 = unset */
+    int     detach;       /* -d */
+    int     all;          /* -a */
+} target_args_t;
+
+static void parse_target_args(int argc, wchar_t **argv, int start, target_args_t *a)
 {
     int i;
-    name[0] = L'\0';
-    shell[0] = L'\0';
-    *has_shell = 0;
+    ZeroMemory(a, sizeof(*a));
     for (i = start; i < argc; i++) {
-        if ((wcscmp(argv[i], L"-s") == 0 || wcscmp(argv[i], L"-t") == 0) && i + 1 < argc) {
-            wcscpy_s(name, name_cap, argv[++i]);
-        } else if (argv[i][0] == L'-' && argv[i][1] != L'\0') {
+        const wchar_t *arg = argv[i];
+        if ((wcscmp(arg, L"-s") == 0 || wcscmp(arg, L"-t") == 0) && i + 1 < argc) {
+            wcscpy_s(a->name, 256, argv[++i]);
+        } else if (wcscmp(arg, L"-c") == 0 && i + 1 < argc) {
+            wcscpy_s(a->cwd, MAX_PATH, argv[++i]);
+        } else if (wcscmp(arg, L"-n") == 0 && i + 1 < argc) {
+            wcscpy_s(a->winname, 64, argv[++i]);
+        } else if (wcscmp(arg, L"-x") == 0 && i + 1 < argc) {
+            a->cols = _wtoi(argv[++i]);
+        } else if (wcscmp(arg, L"-y") == 0 && i + 1 < argc) {
+            a->rows = _wtoi(argv[++i]);
+        } else if (wcscmp(arg, L"-d") == 0) {
+            a->detach = 1;
+        } else if (wcscmp(arg, L"-a") == 0) {
+            a->all = 1;
+        } else if (arg[0] == L'-' && arg[1] != L'\0') {
             /* Unrecognized flag: ignore for now (kept forward-compatible). */
         } else {
-            if (*has_shell) wcscat_s(shell, shell_cap, L" ");
-            wcscat_s(shell, shell_cap, argv[i]);
-            *has_shell = 1;
+            if (a->has_shell) wcscat_s(a->shell, CMD_MAX, L" ");
+            wcscat_s(a->shell, CMD_MAX, arg);
+            a->has_shell = 1;
         }
     }
 }
@@ -337,6 +388,40 @@ static int kill_session_cmd(const wchar_t *name)
     return 0;
 }
 
+/* kill-session -a -t <name>: kill every session except `name`. */
+static int kill_session_others_cmd(const wchar_t *name)
+{
+    char names[SESS_MAX * SESS_NAME];
+    int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i, killed = 0;
+    const wchar_t *keep = (name && name[0]) ? name : L"default";
+    for (i = 0; i < n; i++) {
+        wchar_t w[SESS_NAME * 2];
+        MultiByteToWideChar(CP_UTF8, 0, names + (size_t)i * SESS_NAME, -1, w, SESS_NAME * 2);
+        if (wcscmp(w, keep) == 0)
+            continue;
+        if (kill_one(w) == 0)
+            killed++;
+    }
+    printf("killed %d session(s)\n", killed);
+    return 0;
+}
+
+/* has-session -t <name>: exit 0 if a server for that session is running (and
+ * responsive), else print an error and exit 1, matching tmux. */
+static int has_session_cmd(const wchar_t *name)
+{
+    wchar_t pipename[512];
+    HANDLE pipe;
+    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
+    pipe = ipc_client_connect(pipename, 0);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "tmux: can't find session '%ls'\n", (name && name[0]) ? name : L"default");
+        return 1;
+    }
+    CloseHandle(pipe);
+    return 0;
+}
+
 static int kill_server_cmd(void)
 {
     char names[SESS_MAX * SESS_NAME];
@@ -380,7 +465,7 @@ static int collect_output(const wchar_t *cmdline, strbuf_t *raw)
     collect_ctx_t ctx;
     CRITICAL_SECTION lock;
     HANDLE h;
-    int rc = conpty_spawn(&pty, cmdline, 80, 25);
+    int rc = conpty_spawn(&pty, cmdline, 80, 25, NULL);
     if (rc != 0)
         return rc;
 
@@ -505,8 +590,8 @@ static int run_selftest_render(int argc, wchar_t **argv)
 static int run_selftest_split(void)
 {
     HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
-    pane_t *a = pane_create(1, L"cmd.exe /c echo PANE_A_TEXT", 40, 6, wake);
-    pane_t *b = pane_create(2, L"cmd.exe /c echo PANE_B_TEXT", 40, 6, wake);
+    pane_t *a = pane_create(1, L"cmd.exe /c echo PANE_A_TEXT", 40, 6, wake, NULL);
+    pane_t *b = pane_create(2, L"cmd.exe /c echo PANE_B_TEXT", 40, 6, wake, NULL);
     layout_node_t *root;
     strbuf_t frame;
     char la[128], lb[128];
@@ -604,7 +689,7 @@ static int run_selftest_ipc(void)
 
     ipc_pipe_name(pipename, 512, L"selftest");
 
-    if (spawn_server_ex(pipename, L"cmd.exe", &server) != 0) {
+    if (spawn_server_ex(pipename, L"cmd.exe", NULL, 0, 0, &server) != 0) {
         printf("FAIL: could not spawn server\n");
         return 1;
     }
@@ -1259,49 +1344,72 @@ int wmain(int argc, wchar_t **argv)
 
     if (argc > 1 && wcscmp(argv[1], L"--server") == 0) {
         const wchar_t *pipename = (argc > 2) ? argv[2] : L"";
-        if (argc > 3) join_cmdline(shell, argc, argv, 3);
-        else          wcscpy_s(shell, CMD_MAX, default_shell());
-        return run_server(pipename, shell);
+        const wchar_t *cwd = NULL;
+        int scols = 0, srows = 0, idx = 3;
+
+        while (idx < argc) {
+            if (wcscmp(argv[idx], L"--cwd") == 0 && idx + 1 < argc) {
+                cwd = argv[idx + 1];
+                idx += 2;
+            } else if (wcscmp(argv[idx], L"--size") == 0 && idx + 1 < argc) {
+                swscanf_s(argv[idx + 1], L"%dx%d", &scols, &srows);
+                idx += 2;
+            } else {
+                break;
+            }
+        }
+        if (idx < argc) join_cmdline(shell, argc, argv, idx);
+        else            wcscpy_s(shell, CMD_MAX, default_shell());
+        return run_server(pipename, shell, cwd, scols, srows);
     }
 
     if (argc > 1 && wcscmp(argv[1], L"--standalone") == 0) {
         if (argc > 2) join_cmdline(shell, argc, argv, 2);
         else          wcscpy_s(shell, CMD_MAX, default_shell());
-        return run_standalone(shell);
+        return run_standalone(shell, NULL);
+    }
+
+    if (argc > 1 && (wcscmp(argv[1], L"-V") == 0 || wcscmp(argv[1], L"--version") == 0)) {
+        printf("tmuxw " TMUXW_VERSION "\n");
+        return 0;
     }
 
     /* No arguments: attach to (or start) the default session. */
     if (argc == 1)
-        return attach_session(L"default", default_shell(), 1);
+        return attach_session(L"default", default_shell(), 1, NULL, 0, 0, 0);
 
     /* A tmux-style client subcommand: new / new-session / attach / a. */
     if (argv[1][0] != L'-') {
         const wchar_t *sub = argv[1];
-        wchar_t name[256];
-        int has_shell;
+        target_args_t a;
 
-        parse_target_and_shell(argc, argv, 2, name, 256, shell, CMD_MAX, &has_shell);
+        parse_target_args(argc, argv, 2, &a);
 
         if (wcscmp(sub, L"new") == 0 || wcscmp(sub, L"new-session") == 0)
-            return attach_session(name, has_shell ? shell : default_shell(), 1);
+            return attach_session(a.name, a.has_shell ? a.shell : default_shell(), 1,
+                                  a.cwd[0] ? a.cwd : NULL, a.cols, a.rows, a.detach);
 
         if (wcscmp(sub, L"attach") == 0 || wcscmp(sub, L"attach-session") == 0 ||
             wcscmp(sub, L"a") == 0)
-            return attach_session(name, default_shell(), 0);
+            return attach_session(a.name, default_shell(), 0, NULL, 0, 0, 0);
 
         if (wcscmp(sub, L"ls") == 0 || wcscmp(sub, L"list-sessions") == 0)
             return list_sessions();
 
+        if (wcscmp(sub, L"has-session") == 0 || wcscmp(sub, L"has") == 0)
+            return has_session_cmd(a.name);
+
         if (wcscmp(sub, L"kill-session") == 0)
-            return kill_session_cmd(name);
+            return a.all ? kill_session_others_cmd(a.name) : kill_session_cmd(a.name);
 
         if (wcscmp(sub, L"kill-server") == 0)
             return kill_server_cmd();
 
         fprintf(stderr, "tmux: unknown command: %ls\n", sub);
         fprintf(stderr,
-                "usage: tmux [new|new-session|attach|attach-session|a|ls|"
-                "kill-session|kill-server] [-s|-t name] [command]\n");
+                "usage: tmux [new|new-session|attach|attach-session|a|ls|has-session|has|"
+                "kill-session [-a]|kill-server] [-s|-t name] [-c dir] [-x width] [-y height] "
+                "[-d] [command]\n");
         return 1;
     }
 

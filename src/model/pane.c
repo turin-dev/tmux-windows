@@ -25,7 +25,8 @@ static DWORD WINAPI pane_reader(LPVOID arg)
     return 0;
 }
 
-pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake)
+pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake,
+                     const wchar_t *cwd)
 {
     pane_t *p;
     if (cols <= 0) cols = 80;
@@ -46,7 +47,7 @@ pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE w
     if (p->screen == NULL)
         goto fail;
 
-    if (conpty_spawn(&p->pty, cmdline, (short)cols, (short)rows) != 0)
+    if (conpty_spawn(&p->pty, cmdline, (short)cols, (short)rows, cwd) != 0)
         goto fail;
     p->has_conpty = 1;
 

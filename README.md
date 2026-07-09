@@ -78,18 +78,28 @@ Once installed (or with `build\` on your `PATH`), the familiar `tmux` name works
 too — `tmux` and `tmuxw` are the same binary:
 
 ```
-tmux                 REM attach to (or start) the default session
-tmux new             REM start a session and attach (alias: new-session)
-tmux new -s work     REM start/attach a named session
-tmux attach -t work  REM attach to an existing session (alias: a)
-tmux ls              REM list running sessions (alias: list-sessions)
-tmux kill-session -t work   REM stop a session's server
-tmux kill-server     REM stop every tmuxw session
-tmuxw --standalone   REM run in one process, no server (for debugging)
+tmux                          REM attach to (or start) the default session
+tmux new                      REM start a session and attach (alias: new-session)
+tmux new -s work               REM start/attach a named session
+tmux new -d -s work            REM start a session without attaching (background it)
+tmux new -s work -c C:\proj     REM start a session with a given starting directory
+tmux new -s work -x 200 -y 50  REM start a session at a given initial size
+tmux attach -t work            REM attach to an existing session (alias: a)
+tmux has-session -t work       REM exit 0 if that session's server is running (alias: has)
+tmux ls                        REM list running sessions (alias: list-sessions)
+tmux kill-session -t work      REM stop one session's server
+tmux kill-session -t work -a    REM stop every OTHER session's server
+tmux kill-server               REM stop every tmuxw session
+tmux -V                        REM print the version (alias: --version)
+tmuxw --standalone             REM run in one process, no server (for debugging)
 ```
 
 Each named session is an independent background server, so sessions detach and
-reattach separately and `tmux ls` enumerates them.
+reattach separately and `tmux ls` enumerates them. A session's server keeps
+running independently of the terminal that started it — including across an
+SSH disconnect, which on Windows normally tears down everything in the login
+session's process tree; the server escapes that so reconnecting finds your
+panes and shells exactly as you left them.
 
 ### Key bindings (prefix = Ctrl-B)
 

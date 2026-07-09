@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(tmuxw C)
+project(tmuxw VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -23,6 +23,7 @@ add_compile_definitions(
   NOMINMAX
   UNICODE
   _UNICODE
+  TMUXW_VERSION="${PROJECT_VERSION}"
 )
 
 if(MSVC)

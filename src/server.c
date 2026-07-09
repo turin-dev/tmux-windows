@@ -166,7 +166,8 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
     return session_ended ? 0 : 1;
 }
 
-int run_server(const wchar_t *pipename, const wchar_t *shell)
+int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd,
+               int cols, int rows)
 {
     HANDLE wake;
     session_t *sess;
@@ -174,7 +175,7 @@ int run_server(const wchar_t *pipename, const wchar_t *shell)
 
     srvlog("run_server: start");
     wake = CreateEvent(NULL, FALSE, FALSE, NULL);
-    sess = session_create(shell, 80, 25, wake);
+    sess = session_create_in(shell, cols > 0 ? cols : 80, rows > 0 ? rows : 25, wake, cwd);
     if (sess == NULL) {
         srvlog("run_server: session_create FAILED");
         if (wake) CloseHandle(wake);
@@ -236,7 +237,7 @@ static DWORD WINAPI standalone_reader(LPVOID arg)
     return 0;
 }
 
-int run_standalone(const wchar_t *shell)
+int run_standalone(const wchar_t *shell, const wchar_t *cwd)
 {
     winterm_t term;
     HANDLE wake, h_input;
@@ -254,7 +255,7 @@ int run_standalone(const wchar_t *shell)
     pc = cols; pr = rows;
 
     wake = CreateEvent(NULL, FALSE, FALSE, NULL);
-    sess = session_create(shell, cols, rows, wake);
+    sess = session_create_in(shell, cols, rows, wake, cwd);
     if (sess == NULL) {
         if (wake) CloseHandle(wake);
         winterm_restore(&term);

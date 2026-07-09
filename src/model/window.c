@@ -35,7 +35,8 @@ static void derive_name(char *out, size_t cap, const wchar_t *shell)
     }
 }
 
-window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
+window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
+                        const wchar_t *cwd)
 {
     window_t *w;
     pane_t *first;
@@ -50,7 +51,7 @@ window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
     w->next_pane_id = 1;
     derive_name(w->name, sizeof(w->name), shell);
 
-    first = pane_create(w->next_pane_id++, shell, cols, rows, wake);
+    first = pane_create(w->next_pane_id++, shell, cols, rows, wake, cwd);
     if (first == NULL) {
         free(w);
         return NULL;
@@ -152,7 +153,7 @@ void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
     pane_t *np;
     if (layout_find(w->root, w->active) == NULL || layout_count(w->root) >= TMUXW_MAX_PANES)
         return;
-    np = pane_create(w->next_pane_id++, shell, w->active->cols, w->active->rows, wake);
+    np = pane_create(w->next_pane_id++, shell, w->active->cols, w->active->rows, wake, NULL);
     if (np == NULL)
         return;
     if (!split_with_pane(w, np, type))

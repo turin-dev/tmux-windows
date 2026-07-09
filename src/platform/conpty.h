@@ -17,11 +17,13 @@ typedef struct conpty {
     HANDLE thread;        /* child main thread handle */
 } conpty_t;
 
-/* Spawn `cmdline` in a fresh pseudo console sized `cols` x `rows`.
+/* Spawn `cmdline` in a fresh pseudo console sized `cols` x `rows`, starting in
+ * `cwd` (NULL/empty inherits the caller's current directory).
  * `cmdline` must be a mutable-safe command line (CreateProcessW may modify a
  * copy internally; we copy it ourselves). Returns 0 on success, else a Win32
  * error / HRESULT-style non-zero code. On failure `*pty` is left zeroed. */
-int conpty_spawn(conpty_t *pty, const wchar_t *cmdline, short cols, short rows);
+int conpty_spawn(conpty_t *pty, const wchar_t *cmdline, short cols, short rows,
+                  const wchar_t *cwd);
 
 /* Resize the pseudo console. Returns 0 on success. */
 int conpty_resize(conpty_t *pty, short cols, short rows);
