@@ -742,6 +742,43 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* send-keys types into the active pane; a ';' separates chained commands. */
+static int run_selftest_sendkeys(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(400);
+    session_pump(s);
+
+    /* Command sequence: create a window and rename it in one line. */
+    session_run(s, "new-window ; rename-window SEQWIN");
+    /* Type a command into the new window and run it. */
+    session_run(s, "send-keys \"echo SENDKEYS_OK\" Enter");
+    Sleep(800);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    if (strstr(frame.data, "SEQWIN") == NULL)       { printf("FAIL: ; command sequence did not rename\n"); ok = 0; }
+    if (strstr(frame.data, "SENDKEYS_OK") == NULL)  { printf("FAIL: send-keys output missing\n"); ok = 0; }
+
+    printf("%s\n", ok ? "SENDKEYS SELFTEST PASSED" : "SENDKEYS SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* base-index shifts the window numbers shown and used by select-window -t. */
 static int run_selftest_options(void)
 {
@@ -809,6 +846,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_break();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-options") == 0)
         return run_selftest_options();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-sendkeys") == 0)
+        return run_selftest_sendkeys();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

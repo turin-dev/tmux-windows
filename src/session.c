@@ -425,6 +425,40 @@ static void cmd_send_prefix(session_t *s, int argc, char **argv)
     if (w) window_write_active(w, &b, 1);
 }
 
+/* Translate one send-keys argument (a key name or literal text) into bytes. */
+static void append_key(strbuf_t *o, const char *arg)
+{
+    int k = cmd_parse_key(arg);
+    switch (k) {
+        case KEY_UP:    strbuf_append(o, "\x1b[A", 3); return;
+        case KEY_DOWN:  strbuf_append(o, "\x1b[B", 3); return;
+        case KEY_RIGHT: strbuf_append(o, "\x1b[C", 3); return;
+        case KEY_LEFT:  strbuf_append(o, "\x1b[D", 3); return;
+        case KEY_PPAGE: strbuf_append(o, "\x1b[5~", 4); return;
+        case KEY_NPAGE: strbuf_append(o, "\x1b[6~", 4); return;
+        default: break;
+    }
+    if (k >= 0 && k < 256) { strbuf_putc(o, (char)k); return; }  /* char / C-x / Enter */
+    strbuf_append(o, arg, strlen(arg));                          /* literal text */
+}
+
+static void cmd_send_keys(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    strbuf_t o;
+    int i;
+    if (w == NULL)
+        return;
+    strbuf_init(&o);
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) { i++; continue; }  /* ignore target */
+        append_key(&o, argv[i]);
+    }
+    if (o.len)
+        window_write_active(w, o.data, o.len);
+    strbuf_free(&o);
+}
+
 static void cmd_rename_window(session_t *s, int argc, char **argv)
 {
     window_t *w = cur_window(s);
@@ -529,6 +563,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "detach-client",   cmd_detach },
     { "copy-mode",       cmd_copymode },
     { "send-prefix",     cmd_send_prefix },
+    { "send-keys",       cmd_send_keys },
     { "rename-window",   cmd_rename_window },
     { "rename-session",  cmd_rename_session },
     { "set",             cmd_set },
@@ -541,21 +576,35 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "command-prompt",  cmd_command_prompt },
 };
 
-static void session_run_command(session_t *s, const char *line)
+static void run_argv(session_t *s, int argc, char **argv)
 {
-    char storage[512];
-    char *argv[CMD_MAX_ARGS];
-    int argc, i;
-
-    if (line == NULL || line[0] == '\0')
-        return;
-    argc = cmd_tokenize(line, storage, sizeof(storage), argv, CMD_MAX_ARGS);
+    int i;
     if (argc == 0)
         return;
     for (i = 0; i < (int)(sizeof(CMD_TABLE) / sizeof(CMD_TABLE[0])); i++) {
         if (strcmp(argv[0], CMD_TABLE[i].name) == 0) {
             CMD_TABLE[i].fn(s, argc, argv);
             return;
+        }
+    }
+}
+
+static void session_run_command(session_t *s, const char *line)
+{
+    char storage[512];
+    char *argv[CMD_MAX_ARGS];
+    int argc, i, seg = 0;
+
+    if (line == NULL || line[0] == '\0')
+        return;
+    argc = cmd_tokenize(line, storage, sizeof(storage), argv, CMD_MAX_ARGS);
+    if (argc == 0)
+        return;
+    /* A standalone ';' token separates commands: "cmd1 args ; cmd2 args". */
+    for (i = 0; i <= argc; i++) {
+        if (i == argc || strcmp(argv[i], ";") == 0) {
+            run_argv(s, i - seg, &argv[seg]);
+            seg = i + 1;
         }
     }
 }

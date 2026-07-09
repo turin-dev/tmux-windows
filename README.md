@@ -162,8 +162,11 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
 `select-window -t N`, `kill-window`, `rename-window <name>`,
 `rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
-`command-prompt`, `set <option> <value>`, `bind <key> <command>`,
-`unbind <key>`, `source-file <path>`.
+`send-keys <keys...>`, `command-prompt`, `set <option> <value>`,
+`bind <key> <command>`, `unbind <key>`, `source-file <path>`.
+
+Multiple commands can be chained on one line (in a binding, config, or prompt)
+with a standalone `;`, e.g. `bind S "split-window -v ; select-pane -D"`.
 
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
