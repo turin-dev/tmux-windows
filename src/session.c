@@ -54,6 +54,7 @@ struct session {
     int             base_index;       /* first window number shown/selected */
     int             pane_base_index;  /* first pane number for select-pane -t */
     int             show_panes;       /* display-panes overlay ticks remaining */
+    int             clock_mode;       /* big-clock overlay active */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -74,6 +75,62 @@ struct session {
 
 static void session_run_command(session_t *s, const char *line);
 static void session_load_config_path(session_t *s, const char *path);
+
+/* ----- big-digit clock (clock-mode) ----------------------------------------- */
+
+/* 3x5 glyphs for '0'..'9' and ':' ('#' = lit block). */
+static const char *const CLOCK_FONT[11][5] = {
+    {"###","# #","# #","# #","###"}, /* 0 */
+    {"  #","  #","  #","  #","  #"}, /* 1 */
+    {"###","  #","###","#  ","###"}, /* 2 */
+    {"###","  #","###","  #","###"}, /* 3 */
+    {"# #","# #","###","  #","  #"}, /* 4 */
+    {"###","#  ","###","  #","###"}, /* 5 */
+    {"###","#  ","###","# #","###"}, /* 6 */
+    {"###","  #","  #","  #","  #"}, /* 7 */
+    {"###","# #","###","# #","###"}, /* 8 */
+    {"###","# #","###","  #","###"}, /* 9 */
+    {"   "," # ","   "," # ","   "}, /* : */
+};
+
+static const char *clock_glyph(char c, int row)
+{
+    if (c >= '0' && c <= '9') return CLOCK_FONT[c - '0'][row];
+    if (c == ':')             return CLOCK_FONT[10][row];
+    return "   ";
+}
+
+/* Draw "HH:MM" in big digits centred in the rectangle (x,y,cols,rows). */
+static void clock_draw(strbuf_t *out, int x, int y, int cols, int rows)
+{
+    SYSTEMTIME st;
+    char t[6];
+    int gw, ox, oy, row, i;
+
+    GetLocalTime(&st);
+    _snprintf_s(t, sizeof(t), _TRUNCATE, "%02d:%02d", st.wHour, st.wMinute);
+
+    gw = 5 * 3 + 4;                 /* 5 glyphs, 3 wide, 1-col gaps */
+    ox = x + (cols - gw) / 2;
+    oy = y + (rows - 5) / 2;
+    if (ox < x) ox = x;
+    if (oy < y) oy = y;
+
+    for (row = 0; row < 5; row++) {
+        int cx = ox;
+        strbuf_printf(out, "\x1b[%d;%dH", oy + row + 1, ox + 1);
+        for (i = 0; t[i]; i++) {
+            const char *g = clock_glyph(t[i], row);
+            int k;
+            for (k = 0; k < 3; k++)
+                if (g[k] == '#') strbuf_append(out, "\x1b[7m \x1b[0m", 9);
+                else             strbuf_putc(out, ' ');
+            strbuf_putc(out, ' ');   /* inter-glyph gap */
+            cx += 4;
+        }
+        (void)cx;
+    }
+}
 
 /* Exit copy mode if it no longer applies to the current active pane (e.g. after
  * switching panes/windows or a pane exiting). */
@@ -558,6 +615,13 @@ static void cmd_display_panes(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+static void cmd_clock_mode(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    s->clock_mode = 1;
+    mark(s, 1);
+}
+
 static void cmd_command_prompt(session_t *s, int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -603,6 +667,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "source-file",     cmd_source },
     { "command-prompt",  cmd_command_prompt },
     { "display-panes",   cmd_display_panes },
+    { "clock-mode",      cmd_clock_mode },
 };
 
 static void run_argv(session_t *s, int argc, char **argv)
@@ -798,6 +863,7 @@ static void install_default_bindings(session_t *s)
     bind_set(s, 'd',  "detach-client");
     bind_set(s, ':',  "command-prompt");
     bind_set(s, 'q',  "display-panes");
+    bind_set(s, 't',  "clock-mode");
     bind_set(s, 'z',  "resize-pane -Z");
     bind_set(s, ' ',  "next-layout");
     bind_set(s, '{',  "swap-pane -U");
@@ -894,6 +960,13 @@ void session_input(session_t *s, const char *bytes, size_t n)
                 s->prompt[s->prompt_len++] = (char)c;
             }
         }
+        mark(s, 1);
+        return;
+    }
+
+    /* Clock mode: any key returns to the live view. */
+    if (s->clock_mode && n > 0) {
+        s->clock_mode = 0;
         mark(s, 1);
         return;
     }
@@ -1063,6 +1136,10 @@ void session_render(session_t *s, strbuf_t *frame)
     if (s->status_on)
         render_status(s, frame);       /* draw bar first */
     window_render(frame, w, s->full_redraw, &s->copy); /* panes + cursor last */
+    if (s->clock_mode) {
+        pane_t *ap = window_active(w);
+        if (ap) clock_draw(frame, ap->x, ap->y, ap->cols, ap->rows);
+    }
     if (s->show_panes > 0)
         window_display_panes(frame, w, s->pane_base_index);
     if (s->prompt_active)

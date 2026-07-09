@@ -742,6 +742,46 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* clock-mode overlays a big digital clock (lit blocks) over the active pane. */
+static int run_selftest_clock(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1, blocks = 0;
+    const char *p;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(300);
+    session_pump(s);
+
+    session_run(s, "clock-mode");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    /* The clock draws many lit blocks: "\x1b[7m \x1b[0m". */
+    for (p = frame.data; (p = strstr(p, "\x1b[7m \x1b[0m")) != NULL; p += 9)
+        blocks++;
+    if (blocks < 5) { printf("FAIL: clock did not render (blocks=%d)\n", blocks); ok = 0; }
+
+    /* A key dismisses clock mode. */
+    session_input(s, " ", 1);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    printf("%s\n", ok ? "CLOCK SELFTEST PASSED" : "CLOCK SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* display-panes overlays each pane's number until a key dismisses it. */
 static int run_selftest_display(void)
 {
@@ -882,6 +922,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_sendkeys();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-display") == 0)
         return run_selftest_display();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-clock") == 0)
+        return run_selftest_clock();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 
