@@ -174,6 +174,10 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 Multiple commands can be chained on one line (in a binding, config, or prompt)
 with a standalone `;`, e.g. `bind S "split-window -v ; select-pane -D"`.
 
+`bind -r <key> <command>` makes a binding *repeatable*: for a short window after
+it runs you can press the key again without the prefix (handy for `bind -r H
+resize-pane -L`).
+
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
 

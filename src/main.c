@@ -742,6 +742,43 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* A -r binding repeats without the prefix during a short window. */
+static int run_selftest_repeat(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "bind -r a new-window");
+    session_input(s, "\x02" "a", 2);   /* Ctrl-B a -> window 1, opens repeat */
+    session_input(s, "a", 1);           /* repeat (no prefix) -> window 2 */
+    Sleep(150);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    /* Windows 0, 1, 2 exist with 2 current; a fourth (3:cmd) must not. */
+    if (strstr(frame.data, "2:cmd*") == NULL) { printf("FAIL: -r repeat did not create window 2\n"); ok = 0; }
+    if (strstr(frame.data, "3:cmd") != NULL)  { printf("FAIL: unexpected extra window\n"); ok = 0; }
+
+    printf("%s\n", ok ? "REPEAT SELFTEST PASSED" : "REPEAT SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* clock-mode overlays a big digital clock (lit blocks) over the active pane. */
 static int run_selftest_clock(void)
 {
@@ -924,6 +961,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_display();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-clock") == 0)
         return run_selftest_clock();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-repeat") == 0)
+        return run_selftest_repeat();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

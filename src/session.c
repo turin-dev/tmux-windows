@@ -27,8 +27,11 @@ enum { MN_NONE, MN_ESC, MN_CSI, MN_MOUSE };
 #define BIND_CMD_MAX  128
 #define PROMPT_MAX    256
 
+#define REPEAT_TICKS  10   /* ~0.5s window for -r repeat keys (50ms serve tick) */
+
 typedef struct keybind {
     int  key;
+    int  repeat;           /* -r: usable without the prefix during the window */
     char cmd[BIND_CMD_MAX];
 } keybind_t;
 
@@ -55,6 +58,7 @@ struct session {
     int             pane_base_index;  /* first pane number for select-pane -t */
     int             show_panes;       /* display-panes overlay ticks remaining */
     int             clock_mode;       /* big-clock overlay active */
+    int             repeat_ticks;     /* -r repeat window remaining */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -215,13 +219,20 @@ static void kill_window(session_t *s)
 
 /* ----- key bindings --------------------------------------------------------- */
 
-static const char *bind_find(const session_t *s, int key)
+static const keybind_t *bind_lookup(const session_t *s, int key)
 {
     int i;
     for (i = 0; i < s->nbind; i++)
         if (s->bind[i].key == key)
-            return s->bind[i].cmd;
+            return &s->bind[i];
     return NULL;
+}
+
+static void bind_mark_repeat(session_t *s, int key, int repeat)
+{
+    int i;
+    for (i = 0; i < s->nbind; i++)
+        if (s->bind[i].key == key) { s->bind[i].repeat = repeat; return; }
 }
 
 static void bind_set(session_t *s, int key, const char *cmd)
@@ -582,17 +593,22 @@ static void cmd_set(session_t *s, int argc, char **argv)
 
 static void cmd_bind(session_t *s, int argc, char **argv)
 {
-    int k, i;
+    int k, i, ki = 1, repeat = 0;
     char buf[BIND_CMD_MAX];
-    if (argc < 3) return;
-    k = cmd_parse_key(argv[1]);
+    while (ki < argc && argv[ki][0] == '-' && argv[ki][1] != '\0') {
+        if (strcmp(argv[ki], "-r") == 0) repeat = 1;
+        ki++;   /* skip -r / -n / -T etc. */
+    }
+    if (argc - ki < 2) return;
+    k = cmd_parse_key(argv[ki]);
     if (k < 0) return;
     buf[0] = '\0';
-    for (i = 2; i < argc; i++) {
-        if (i > 2) strcat_s(buf, sizeof(buf), " ");
+    for (i = ki + 1; i < argc; i++) {
+        if (i > ki + 1) strcat_s(buf, sizeof(buf), " ");
         strcat_s(buf, sizeof(buf), argv[i]);
     }
     bind_set(s, k, buf);
+    bind_mark_repeat(s, k, repeat);
 }
 
 static void cmd_unbind(session_t *s, int argc, char **argv)
@@ -703,12 +719,16 @@ static void session_run_command(session_t *s, const char *line)
     }
 }
 
-/* Run the command bound to `keyid`, if any. */
-static void run_key(session_t *s, int keyid)
+/* Run the command bound to `keyid`, if any. Returns 1 if the binding is
+ * repeatable (-r). */
+static int run_key(session_t *s, int keyid)
 {
-    const char *cmd = bind_find(s, keyid);
-    if (cmd)
-        session_run_command(s, cmd);
+    const keybind_t *b = bind_lookup(s, keyid);
+    if (b) {
+        session_run_command(s, b->cmd);
+        return b->repeat;
+    }
+    return 0;
 }
 
 static void handle_prefix(session_t *s, unsigned char c)
@@ -718,7 +738,8 @@ static void handle_prefix(session_t *s, unsigned char c)
         s->pstate = PS_ESC;
         return;
     }
-    run_key(s, (int)c);
+    if (run_key(s, (int)c))
+        s->repeat_ticks = REPEAT_TICKS;   /* open the -r repeat window */
 }
 
 /* Act on one decoded SGR mouse event (x, y are 1-based screen cells). */
@@ -1000,6 +1021,15 @@ void session_input(session_t *s, const char *bytes, size_t n)
         unsigned char c = (unsigned char)bytes[i];
         switch (s->pstate) {
             case PS_NORMAL:
+                if (s->repeat_ticks > 0) {
+                    const keybind_t *b = bind_lookup(s, (int)c);
+                    if (b && b->repeat) {            /* -r key without prefix */
+                        session_run_command(s, b->cmd);
+                        s->repeat_ticks = REPEAT_TICKS;
+                        break;
+                    }
+                    s->repeat_ticks = 0;             /* any other key ends it */
+                }
                 if (s->mouse_on && s->mstate != MN_NONE) {
                     feed_mouse_scanner(s, c, &fwd);
                 } else if ((int)c == s->prefix_key) {
@@ -1086,6 +1116,8 @@ void session_tick(session_t *s)
     }
     if (s->show_panes > 0 && --s->show_panes == 0)
         mark(s, 1);            /* overlay expired: repaint to clear it */
+    if (s->repeat_ticks > 0)
+        s->repeat_ticks--;     /* close the -r window over time */
 }
 
 static void render_status(session_t *s, strbuf_t *frame)
