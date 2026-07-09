@@ -40,6 +40,15 @@ window_t *window_create_with_pane(pane_t *p, int cols, int rows, const char *nam
  * pane (nothing to break out). */
 pane_t   *window_extract_active(window_t *w);
 
+/* Like window_extract_active but also removes the last pane (the window becomes
+ * empty, root == NULL). Used by join-pane. */
+pane_t   *window_detach_active(window_t *w);
+
+/* Insert an already-running pane by splitting the active pane (`type`); the
+ * inserted pane becomes active. If the window is empty, `p` becomes its sole
+ * pane. Returns 1 on success (else the caller still owns `p`). */
+int       window_insert_pane(window_t *w, pane_t *p, int type);
+
 /* Re-tile panes into a cols x rows area. */
 void      window_apply(window_t *w, int cols, int rows);
 

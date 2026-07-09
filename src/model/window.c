@@ -131,24 +131,66 @@ void window_apply(window_t *w, int cols, int rows)
     layout_apply(w->root, 0, 0, cols, rows);
 }
 
-void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
+/* Split the active leaf, placing existing pane `np` as the new child. */
+static int split_with_pane(window_t *w, pane_t *np, int type)
 {
-    pane_t *np;
     layout_node_t *leaf = layout_find(w->root, w->active);
     if (leaf == NULL || layout_count(w->root) >= TMUXW_MAX_PANES)
-        return;
-    np = pane_create(w->next_pane_id++, shell, w->active->cols, w->active->rows, wake);
-    if (np == NULL)
-        return;
-    if (layout_split(&w->root, leaf, type, np) == NULL) {
-        pane_close(np);
-        return;
-    }
+        return 0;
+    if (layout_split(&w->root, leaf, type, np) == NULL)
+        return 0;
     w->zoomed = 0;         /* splitting always reveals the full layout */
     w->drag = NULL;
     w->last_active = w->active;
     w->active = np;
     layout_apply(w->root, 0, 0, w->cols, w->rows);
+    return 1;
+}
+
+void window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake)
+{
+    pane_t *np;
+    if (layout_find(w->root, w->active) == NULL || layout_count(w->root) >= TMUXW_MAX_PANES)
+        return;
+    np = pane_create(w->next_pane_id++, shell, w->active->cols, w->active->rows, wake);
+    if (np == NULL)
+        return;
+    if (!split_with_pane(w, np, type))
+        pane_close(np);
+}
+
+pane_t *window_detach_active(window_t *w)
+{
+    pane_t *victim = w->active;
+    layout_node_t *leaf;
+    if (w->root == NULL || victim == NULL)
+        return NULL;
+    leaf = layout_find(w->root, victim);
+    if (leaf == NULL)
+        return NULL;
+    layout_remove(&w->root, leaf);
+    w->zoomed = 0;
+    w->drag = NULL;
+    if (w->last_active == victim)
+        w->last_active = NULL;
+    w->active = (w->root != NULL) ? layout_first_leaf(w->root)->pane : NULL;
+    if (w->root != NULL)
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+    return victim;
+}
+
+int window_insert_pane(window_t *w, pane_t *p, int type)
+{
+    if (p == NULL)
+        return 0;
+    if (w->root == NULL) {                 /* empty window: p becomes the sole pane */
+        w->root = layout_leaf(p);
+        if (w->root == NULL) return 0;
+        w->active = p;
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+        return 1;
+    }
+    return split_with_pane(w, p, type);
 }
 
 void window_resize_active(window_t *w, int dir, int amount)

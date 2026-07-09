@@ -734,6 +734,15 @@ static int run_selftest_break(void)
     if (strstr(frame.data, "0:cmd") == NULL)  { printf("FAIL: original window missing\n"); ok = 0; }
     if (strstr(frame.data, "1:cmd*") == NULL) { printf("FAIL: broken-out window not current\n"); ok = 0; }
 
+    /* Join window 0's pane back into the current window; window 0 disappears. */
+    session_run(s, "join-pane -s 0");
+    Sleep(150);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "1:cmd") != NULL)  { printf("FAIL: join-pane left a second window\n"); ok = 0; }
+    if (strstr(frame.data, "0:cmd*") == NULL) { printf("FAIL: joined window not current\n"); ok = 0; }
+
     printf("%s\n", ok ? "BREAK SELFTEST PASSED" : "BREAK SELFTEST FAILED");
 
     strbuf_free(&frame);

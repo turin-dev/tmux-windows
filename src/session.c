@@ -419,6 +419,30 @@ static void cmd_break_pane(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+static void cmd_join_pane(session_t *s, int argc, char **argv)
+{
+    window_t *dst = cur_window(s), *src;
+    pane_t *p;
+    int srcidx = -1, type = LN_SPLIT_H, i;
+    for (i = 1; i < argc; i++) {
+        if      (strcmp(argv[i], "-s") == 0 && i + 1 < argc) { srcidx = atoi(argv[++i]) - s->base_index; }
+        else if (strcmp(argv[i], "-h") == 0) type = LN_SPLIT_V;
+        else if (strcmp(argv[i], "-v") == 0) type = LN_SPLIT_H;
+    }
+    if (dst == NULL || srcidx < 0 || srcidx >= s->nwindows || srcidx == s->cur)
+        return;
+    src = s->windows[srcidx];
+    p = window_detach_active(src);
+    if (p == NULL)
+        return;
+    if (!window_insert_pane(dst, p, type)) {
+        pane_close(p);                 /* could not place it */
+    }
+    if (window_empty(src))
+        remove_window(s, srcidx);      /* adjusts s->cur; dst pointer stays valid */
+    mark(s, 1);
+}
+
 static void cmd_paste_buffer(session_t *s, int argc, char **argv)
 {
     window_t *w = cur_window(s);
@@ -667,6 +691,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "rotate-window",   cmd_rotate_window },
     { "swap-pane",       cmd_swap_pane },
     { "break-pane",      cmd_break_pane },
+    { "join-pane",       cmd_join_pane },
     { "paste-buffer",    cmd_paste_buffer },
     { "last-pane",       cmd_last_pane },
     { "last-window",     cmd_last_window },
