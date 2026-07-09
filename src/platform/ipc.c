@@ -211,7 +211,13 @@ HANDLE ipc_server_listen(const wchar_t *pipename)
 
 HANDLE ipc_client_connect(const wchar_t *pipename, int timeout_ms)
 {
+    return ipc_client_connect_ex(pipename, timeout_ms, NULL);
+}
+
+HANDLE ipc_client_connect_ex(const wchar_t *pipename, int timeout_ms, int *out_busy)
+{
     int waited = 0;
+    if (out_busy) *out_busy = 0;
     for (;;) {
         HANDLE h = CreateFileW(pipename, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
@@ -219,6 +225,7 @@ HANDLE ipc_client_connect(const wchar_t *pipename, int timeout_ms)
             return h;
 
         if (GetLastError() == ERROR_PIPE_BUSY) {
+            if (out_busy) *out_busy = 1;
             if (WaitNamedPipeW(pipename, 200))
                 continue;
         }

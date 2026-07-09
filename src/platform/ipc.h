@@ -54,6 +54,12 @@ HANDLE ipc_server_listen(const wchar_t *pipename);
  * pipe handle, or INVALID_HANDLE_VALUE on failure. */
 HANDLE ipc_client_connect(const wchar_t *pipename, int timeout_ms);
 
+/* Like ipc_client_connect, but if non-NULL, *out_busy is set to 1 when the
+ * pipe exists but is already occupied by another client (as opposed to not
+ * existing at all) -- lets callers tell "no such session" apart from
+ * "session exists, already has a client attached". */
+HANDLE ipc_client_connect_ex(const wchar_t *pipename, int timeout_ms, int *out_busy);
+
 /* Create a connected overlapped pipe pair in this process (for tests). Returns
  * 0 on success with both handles set; the caller closes them. */
 int ipc_make_pair(HANDLE *server, HANDLE *client);

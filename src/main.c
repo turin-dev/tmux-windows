@@ -262,15 +262,20 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
 {
     wchar_t pipename[512];
     HANDLE pipe;
+    int busy = 0;
 
     ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
 
-    pipe = ipc_client_connect(pipename, 0);
+    pipe = ipc_client_connect_ex(pipename, 0, &busy);
     if (pipe == INVALID_HANDLE_VALUE) {
         int rc;
         if (!start_if_missing) {
-            fprintf(stderr, "tmux: no server running for session '%ls'\n",
-                    (name && name[0]) ? name : L"default");
+            if (busy)
+                fprintf(stderr, "tmux: session '%ls' already has a client attached\n",
+                        (name && name[0]) ? name : L"default");
+            else
+                fprintf(stderr, "tmux: no server running for session '%ls'\n",
+                        (name && name[0]) ? name : L"default");
             return 1;
         }
         rc = spawn_server_ex(pipename, shell, cwd, cols, rows, NULL);
@@ -364,13 +369,15 @@ static int list_sessions(void)
 }
 
 /* Connect to a session's server and ask it to exit. Returns 0 if the request
- * was delivered, 1 if no such session is running. */
-static int kill_one(const wchar_t *name)
+ * was delivered, 1 if no such session is running (or, if out_busy is
+ * non-NULL, it could exist but already has a client attached -- with only
+ * one pipe instance per session we can't get in to signal it right now). */
+static int kill_one_ex(const wchar_t *name, int *out_busy)
 {
     wchar_t pipename[512];
     HANDLE pipe;
     ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
-    pipe = ipc_client_connect(pipename, 0);
+    pipe = ipc_client_connect_ex(pipename, 0, out_busy);
     if (pipe == INVALID_HANDLE_VALUE)
         return 1;
     ipc_write_frame(pipe, MSG_KILL, NULL, 0);
@@ -379,10 +386,20 @@ static int kill_one(const wchar_t *name)
     return 0;
 }
 
+static int kill_one(const wchar_t *name)
+{
+    return kill_one_ex(name, NULL);
+}
+
 static int kill_session_cmd(const wchar_t *name)
 {
-    if (kill_one(name) != 0) {
-        fprintf(stderr, "tmux: no such session\n");
+    int busy = 0;
+    if (kill_one_ex(name, &busy) != 0) {
+        if (busy)
+            fprintf(stderr, "tmux: session '%ls' has a client attached; detach it first\n",
+                    (name && name[0]) ? name : L"default");
+        else
+            fprintf(stderr, "tmux: no such session\n");
         return 1;
     }
     return 0;
@@ -406,15 +423,20 @@ static int kill_session_others_cmd(const wchar_t *name)
     return 0;
 }
 
-/* has-session -t <name>: exit 0 if a server for that session is running (and
- * responsive), else print an error and exit 1, matching tmux. */
+/* has-session -t <name>: exit 0 if a server for that session is running,
+ * whether or not we can actually connect to it right now (a session with a
+ * client already attached is still very much "there"), else print an error
+ * and exit 1, matching tmux. */
 static int has_session_cmd(const wchar_t *name)
 {
     wchar_t pipename[512];
     HANDLE pipe;
+    int busy = 0;
     ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
-    pipe = ipc_client_connect(pipename, 0);
+    pipe = ipc_client_connect_ex(pipename, 0, &busy);
     if (pipe == INVALID_HANDLE_VALUE) {
+        if (busy)
+            return 0;
         fprintf(stderr, "tmux: can't find session '%ls'\n", (name && name[0]) ? name : L"default");
         return 1;
     }
