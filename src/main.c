@@ -751,6 +751,42 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* choose-window: navigate the picker with k and select window 0 with Enter. */
+static int run_selftest_choose(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "new-window");        /* windows 0,1,2 (current 2) */
+    session_run(s, "new-window");
+    session_run(s, "choose-window");
+    session_input(s, "k", 1);            /* sel 2 -> 1 */
+    session_input(s, "k", 1);            /* sel 1 -> 0 */
+    session_input(s, "\r", 1);           /* select window 0 */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    if (strstr(frame.data, "0:cmd*") == NULL) { printf("FAIL: choose-window did not select window 0\n"); ok = 0; }
+
+    printf("%s\n", ok ? "CHOOSE SELFTEST PASSED" : "CHOOSE SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* display-message shows text on the status row; run-shell/if-shell run cmd.exe. */
 static int run_selftest_shell(void)
 {
@@ -1024,6 +1060,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_repeat();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-shell") == 0)
         return run_selftest_shell();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-choose") == 0)
+        return run_selftest_choose();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

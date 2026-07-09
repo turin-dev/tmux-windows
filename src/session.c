@@ -63,6 +63,8 @@ struct session {
     int             repeat_ticks;     /* -r repeat window remaining */
     char            message[160];     /* transient status message */
     int             message_ticks;    /* display-message ticks remaining */
+    int             choose_active;    /* choose-window picker open */
+    int             choose_sel;       /* highlighted window in the picker */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -729,6 +731,14 @@ static void cmd_display_panes(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+static void cmd_choose_window(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    s->choose_active = 1;
+    s->choose_sel = s->cur;
+    mark(s, 1);
+}
+
 static void show_message(session_t *s, const char *text)
 {
     strncpy_s(s->message, sizeof(s->message), text, _TRUNCATE);
@@ -821,6 +831,8 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "source-file",     cmd_source },
     { "command-prompt",  cmd_command_prompt },
     { "display-panes",   cmd_display_panes },
+    { "choose-window",   cmd_choose_window },
+    { "choose-tree",     cmd_choose_window },
     { "display-message", cmd_display_message },
     { "run-shell",       cmd_run_shell },
     { "if-shell",        cmd_if_shell },
@@ -1025,6 +1037,7 @@ static void install_default_bindings(session_t *s)
     bind_set(s, 'd',  "detach-client");
     bind_set(s, ':',  "command-prompt");
     bind_set(s, 'q',  "display-panes");
+    bind_set(s, 'w',  "choose-window");
     bind_set(s, 't',  "clock-mode");
     bind_set(s, 'z',  "resize-pane -Z");
     bind_set(s, ' ',  "next-layout");
@@ -1131,6 +1144,37 @@ void session_input(session_t *s, const char *bytes, size_t n)
     /* Clock mode: any key returns to the live view. */
     if (s->clock_mode && n > 0) {
         s->clock_mode = 0;
+        mark(s, 1);
+        return;
+    }
+
+    /* choose-window picker: navigate the list, Enter selects, q/Esc cancels. */
+    if (s->choose_active && n > 0) {
+        unsigned char c = (unsigned char)bytes[0];
+        int nw = s->nwindows;
+        if (c == 0x1b) {
+            if (n >= 3 && bytes[1] == '[') {
+                if (bytes[2] == 'A' && s->choose_sel > 0) s->choose_sel--;
+                else if (bytes[2] == 'B' && s->choose_sel < nw - 1) s->choose_sel++;
+            } else {
+                s->choose_active = 0;               /* lone Esc cancels */
+            }
+        } else if ((c == 'j' || c == 0x0e) && s->choose_sel < nw - 1) {
+            s->choose_sel++;
+        } else if ((c == 'k' || c == 0x10) && s->choose_sel > 0) {
+            s->choose_sel--;
+        } else if (c == 'g') {
+            s->choose_sel = 0;
+        } else if (c == 'G') {
+            s->choose_sel = nw - 1;
+        } else if (c == '\r' || c == '\n') {
+            int t = s->choose_sel; s->choose_active = 0; select_window(s, t);
+        } else if (c == 'q') {
+            s->choose_active = 0;
+        } else if (c >= '0' && c <= '9') {
+            int t = (int)(c - '0') - s->base_index;
+            if (t >= 0 && t < nw) { s->choose_active = 0; select_window(s, t); }
+        }
         mark(s, 1);
         return;
     }
@@ -1333,6 +1377,19 @@ static void render_status(session_t *s, strbuf_t *frame)
     status_render(frame, s->cols, s->rows, left, wins, s->nwindows, right);
 }
 
+/* Draw the choose-window picker: one window per row, the selection highlighted. */
+static void render_choose(session_t *s, strbuf_t *frame)
+{
+    int i;
+    for (i = 0; i < s->nwindows && i < s->rows - 1; i++) {
+        char line[96];
+        _snprintf_s(line, sizeof(line), _TRUNCATE, " %d: %-20s ",
+                    i + s->base_index, s->windows[i]->name);
+        strbuf_printf(frame, "\x1b[%d;1H%s%s\x1b[0m",
+                      i + 1, (i == s->choose_sel) ? "\x1b[7m" : "\x1b[1m", line);
+    }
+}
+
 /* Draw a transient message across the status row (reverse video, full width). */
 static void render_message(session_t *s, strbuf_t *frame)
 {
@@ -1379,6 +1436,8 @@ void session_render(session_t *s, strbuf_t *frame)
     }
     if (s->show_panes > 0)
         window_display_panes(frame, w, s->pane_base_index);
+    if (s->choose_active)
+        render_choose(s, frame);       /* window picker overlay */
     if (s->message_ticks > 0)
         render_message(s, frame);      /* transient message over the status row */
     if (s->prompt_active)
