@@ -20,10 +20,10 @@ static void test_status_basic(void)
     wins[0].index = 0; wins[0].name = "pwsh"; wins[0].current = 0;
     wins[1].index = 1; wins[1].name = "cmd";  wins[1].current = 1;
 
-    status_render(&out, 80, 25, "main", wins, 2, "13:37");
+    status_render(&out, 80, 25, "[main] ", wins, 2, "13:37");
     strbuf_putc(&out, '\0');
 
-    CHECK(strstr(out.data, "[main]") != NULL, "shows session name");
+    CHECK(strstr(out.data, "[main]") != NULL, "shows left text");
     CHECK(strstr(out.data, "0:pwsh") != NULL, "shows window 0");
     CHECK(strstr(out.data, "1:cmd*") != NULL, "marks current window with *");
     CHECK(strstr(out.data, "13:37") != NULL, "shows clock");

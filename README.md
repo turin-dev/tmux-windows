@@ -182,9 +182,14 @@ Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).
 
 Options for `set`: `prefix <key>`, `status on|off`, `mouse on|off`,
-`base-index <n>` (first window number), `pane-base-index <n>`. With `mouse on`,
-click a pane to select it, drag a divider to resize, and use the scroll wheel to
-enter copy mode and scroll back.
+`base-index <n>` (first window number), `pane-base-index <n>`,
+`status-left <fmt>`, `status-right <fmt>`. With `mouse on`, click a pane to
+select it, drag a divider to resize, and use the scroll wheel to enter copy mode
+and scroll back.
+
+Status formats expand `#S` (session), `#W`/`#I` (current window name/index),
+`#H` (host), `##` (literal `#`), and `%H %M %S %Y %m %d` (time). Defaults:
+`status-left "[#S] "`, `status-right "%H:%M"`.
 
 ### Headless self-tests
 

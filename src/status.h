@@ -14,12 +14,12 @@ typedef struct status_win {
     int         current;
 } status_win_t;
 
-/* Draw a `cols`-wide status bar at `status_row` (1-based): "[session] " on the
- * left, the window list (current window marked with '*'), and `clock` right-
- * aligned. Rendered in reverse video. */
+/* Draw a `cols`-wide status bar at `status_row` (1-based): `left` text, then the
+ * window list (current window marked with '*'), then `right` text right-aligned.
+ * `left`/`right` are already-expanded strings. Rendered in reverse video. */
 void status_render(strbuf_t *out, int cols, int status_row,
-                   const char *session_name,
+                   const char *left,
                    const status_win_t *wins, int nwins,
-                   const char *clock);
+                   const char *right);
 
 #endif /* TMUXW_STATUS_H */

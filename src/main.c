@@ -921,6 +921,15 @@ static int run_selftest_options(void)
     strbuf_putc(&frame, '\0');
     if (strstr(frame.data, "1:cmd*") == NULL) { printf("FAIL: select-window -t 1 did not pick the first\n"); ok = 0; }
 
+    /* status-left / status-right format expansion (#S, literal text). */
+    session_run(s, "rename-session SESSX");
+    session_run(s, "set status-left \"<#S>\"");
+    session_run(s, "set status-right RIGHTZ");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "<SESSX>") == NULL) { printf("FAIL: status-left #S not expanded\n"); ok = 0; }
+    if (strstr(frame.data, "RIGHTZ") == NULL)  { printf("FAIL: status-right text missing\n"); ok = 0; }
+
     printf("%s\n", ok ? "OPTIONS SELFTEST PASSED" : "OPTIONS SELFTEST FAILED");
 
     strbuf_free(&frame);

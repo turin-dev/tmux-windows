@@ -17,9 +17,9 @@ static int put_str(char *row, int cols, int pos, const char *s)
 }
 
 void status_render(strbuf_t *out, int cols, int status_row,
-                   const char *session_name,
+                   const char *left,
                    const status_win_t *wins, int nwins,
-                   const char *clock)
+                   const char *right)
 {
     char *row;
     int pos = 0, i;
@@ -33,9 +33,7 @@ void status_render(strbuf_t *out, int cols, int status_row,
     memset(row, ' ', (size_t)cols);
     row[cols] = '\0';
 
-    pos += put_str(row, cols, pos, "[");
-    pos += put_str(row, cols, pos, session_name ? session_name : "0");
-    pos += put_str(row, cols, pos, "] ");
+    pos += put_str(row, cols, pos, left ? left : "");
 
     for (i = 0; i < nwins; i++) {
         char seg[96];
@@ -46,11 +44,11 @@ void status_render(strbuf_t *out, int cols, int status_row,
         pos += put_str(row, cols, pos, seg);
     }
 
-    if (clock && *clock) {
-        int cl = (int)strlen(clock);
+    if (right && *right) {
+        int cl = (int)strlen(right);
         int start = cols - cl;
         if (start >= pos && start >= 0)
-            memcpy(row + start, clock, (size_t)cl);
+            memcpy(row + start, right, (size_t)cl);
     }
 
     strbuf_printf(out, "\x1b[%d;1H", status_row);

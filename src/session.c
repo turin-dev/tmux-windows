@@ -56,6 +56,8 @@ struct session {
     int             status_on;
     int             base_index;       /* first window number shown/selected */
     int             pane_base_index;  /* first pane number for select-pane -t */
+    char            status_left[128]; /* status-left format */
+    char            status_right[128];/* status-right format */
     int             show_panes;       /* display-panes overlay ticks remaining */
     int             clock_mode;       /* big-clock overlay active */
     int             repeat_ticks;     /* -r repeat window remaining */
@@ -587,6 +589,12 @@ static void cmd_set(session_t *s, int argc, char **argv)
         mark(s, 1);
     } else if (strcmp(opt, "pane-base-index") == 0 && val) {
         s->pane_base_index = atoi(val);
+    } else if (strcmp(opt, "status-left") == 0 && val) {
+        strncpy_s(s->status_left, sizeof(s->status_left), val, _TRUNCATE);
+        mark(s, 1);
+    } else if (strcmp(opt, "status-right") == 0 && val) {
+        strncpy_s(s->status_right, sizeof(s->status_right), val, _TRUNCATE);
+        mark(s, 1);
     }
     /* Other options (mode-keys, history-limit, ...) are accepted and ignored. */
 }
@@ -934,6 +942,8 @@ session_t *session_create(const wchar_t *shell, int cols, int rows, HANDLE wake)
     s->last_window = -1;
     s->prefix_key = PREFIX_KEY;
     s->status_on = 1;
+    strcpy_s(s->status_left, sizeof(s->status_left), "[#S] ");
+    strcpy_s(s->status_right, sizeof(s->status_right), "%H:%M");
     strcpy_s(s->name, sizeof(s->name), "0");
     install_default_bindings(s);
 
@@ -1120,11 +1130,61 @@ void session_tick(session_t *s)
         s->repeat_ticks--;     /* close the -r window over time */
 }
 
+/* Expand a status format string into `out`: #S session, #W/#I current window,
+ * #H host, ## literal '#'; %H %M %S %Y %m %d time fields. */
+static void expand_status(session_t *s, const char *fmt, char *out, size_t cap)
+{
+    SYSTEMTIME st;
+    size_t o = 0;
+    const char *p = fmt;
+    window_t *w = cur_window(s);
+    GetLocalTime(&st);
+
+    while (*p && o + 1 < cap) {
+        char tmp[64];
+        const char *ins = NULL;
+        if (*p == '#' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'S': ins = s->name; break;
+                case 'W': ins = w ? w->name : ""; break;
+                case 'I': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%d", s->cur + s->base_index); ins = tmp; break;
+                case 'H': case 'h': {
+                    DWORD n = (DWORD)sizeof(tmp);
+                    if (!GetComputerNameA(tmp, &n)) tmp[0] = '\0';
+                    ins = tmp; break;
+                }
+                case '#': tmp[0] = '#'; tmp[1] = '\0'; ins = tmp; break;
+                default:  tmp[0] = '#'; tmp[1] = *p; tmp[2] = '\0'; ins = tmp; break;
+            }
+            p++;
+        } else if (*p == '%' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'H': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%02d", st.wHour); break;
+                case 'M': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%02d", st.wMinute); break;
+                case 'S': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%02d", st.wSecond); break;
+                case 'Y': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%04d", st.wYear); break;
+                case 'm': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%02d", st.wMonth); break;
+                case 'd': _snprintf_s(tmp, sizeof(tmp), _TRUNCATE, "%02d", st.wDay); break;
+                default:  tmp[0] = '%'; tmp[1] = *p; tmp[2] = '\0'; break;
+            }
+            ins = tmp;
+            p++;
+        } else {
+            out[o++] = *p++;
+            continue;
+        }
+        while (ins && *ins && o + 1 < cap)
+            out[o++] = *ins++;
+    }
+    out[o] = '\0';
+}
+
 static void render_status(session_t *s, strbuf_t *frame)
 {
     status_win_t wins[MAX_WINDOWS];
-    char clock[16];
-    SYSTEMTIME st;
+    char left[128], right[128];
     int i;
 
     for (i = 0; i < s->nwindows; i++) {
@@ -1132,10 +1192,10 @@ static void render_status(session_t *s, strbuf_t *frame)
         wins[i].name = s->windows[i]->name;
         wins[i].current = (i == s->cur);
     }
-    GetLocalTime(&st);
-    _snprintf_s(clock, sizeof(clock), _TRUNCATE, "%02d:%02d", st.wHour, st.wMinute);
+    expand_status(s, s->status_left, left, sizeof(left));
+    expand_status(s, s->status_right, right, sizeof(right));
 
-    status_render(frame, s->cols, s->rows, s->name, wins, s->nwindows, clock);
+    status_render(frame, s->cols, s->rows, left, wins, s->nwindows, right);
 }
 
 /* Render the command prompt line at the bottom row (cursor after the text). */
