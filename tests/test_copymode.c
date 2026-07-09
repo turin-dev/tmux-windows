@@ -217,6 +217,27 @@ static void test_visual_modes(void)
     free_pane(p);
 }
 
+static void test_char_jump(void)
+{
+    pane_t *p = make_pane(20, 2);
+    copymode_t cm;
+    /* "the quick fox" : q at col 4, x at col 12. */
+    screen_write(p->screen, "the quick fox\r\nsecond line", 27);
+    copymode_enter(&cm, p);
+    feed(&cm, "g", NULL);              /* line 0, col 0 */
+
+    feed(&cm, "fq", NULL);            /* jump forward to 'q' */
+    CHECK(cm.cur_col == 4, "f jumps to next occurrence");
+    feed(&cm, "fx", NULL);            /* jump forward to 'x' */
+    CHECK(cm.cur_col == 12, "f jumps forward again");
+    feed(&cm, "Fq", NULL);           /* jump backward to 'q' */
+    CHECK(cm.cur_col == 4, "F jumps backward");
+    feed(&cm, "tk", NULL);           /* till 'k' (col 8) -> lands at 7 */
+    CHECK(cm.cur_col == 7, "t stops one before the target");
+
+    free_pane(p);
+}
+
 int main(void)
 {
     test_enter_and_scroll();
@@ -226,6 +247,7 @@ int main(void)
     test_search();
     test_motions();
     test_visual_modes();
+    test_char_jump();
 
     if (failures == 0) { printf("\nALL PASSED\n"); return 0; }
     printf("\n%d FAILURE(S)\n", failures);

@@ -30,6 +30,8 @@ typedef struct copymode {
     int      search_dir;   /* +1 forward, -1 backward (last search direction) */
     char     query[128];
     int      qlen;
+    /* pending f/F/t/T char jump: waiting for the target character */
+    int      jump_pending; /* 'f' 'F' 't' 'T' or 0 */
 } copymode_t;
 
 void copymode_enter(copymode_t *cm, pane_t *pane);

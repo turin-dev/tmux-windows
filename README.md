@@ -134,6 +134,8 @@ Scroll back through a pane's history and copy text to the Windows clipboard:
 |-------------------------|----------------------------------------|
 | `↑↓←→` / `h j k l`      | move the cursor                        |
 | `w` / `b` / `e`         | next / previous / end of word          |
+| `f` / `F` `<c>`         | jump to next / previous char `c`       |
+| `t` / `T` `<c>`         | jump just before next / previous `c`   |
 | `0` / `^` / `$`         | line start / first word / line end     |
 | `PageUp` / `PageDown`   | scroll a full page                     |
 | `Ctrl-U` / `Ctrl-D`     | scroll a half page                     |

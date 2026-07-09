@@ -203,6 +203,21 @@ static void move(copymode_t *cm, int dline, int dcol)
     adjust_view(cm);
 }
 
+/* vi f/F/t/T: jump to `target` on the current line. */
+static void char_jump(copymode_t *cm, int kind, char target)
+{
+    char b[1024];
+    int n = build_line(cm, cm->cur_line, b, sizeof b), j;
+    if (kind == 'f' || kind == 't') {
+        for (j = cm->cur_col + 1; j < n; j++)
+            if (b[j] == target) { cm->cur_col = (kind == 't') ? j - 1 : j; break; }
+    } else { /* 'F' or 'T' */
+        for (j = cm->cur_col - 1; j >= 0; j--)
+            if (b[j] == target) { cm->cur_col = (kind == 'T') ? j + 1 : j; break; }
+    }
+    adjust_view(cm);
+}
+
 static int last_nonspace(copymode_t *cm, int line)
 {
     char b[1024];
@@ -348,6 +363,12 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
             continue;
         }
 
+        if (cm->jump_pending) {             /* target char for f/F/t/T */
+            char_jump(cm, cm->jump_pending, (char)c);
+            cm->jump_pending = 0;
+            continue;
+        }
+
         if (cm->esc == 1) {                 /* just saw ESC */
             if (c == '[') {
                 cm->esc = 2;
@@ -378,6 +399,10 @@ int copymode_input(copymode_t *cm, const char *bytes, size_t n, strbuf_t *text)
         if (c == 'N') { do_search(cm, cm->search_dir ? -cm->search_dir : -1); continue; }
         if (c == 0x15) { move(cm, -(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-U: half up */
         if (c == 0x04) { move(cm, +(vp_rows(cm) / 2), 0); continue; }   /* Ctrl-D: half down */
+        if (c == 'f' || c == 'F' || c == 't' || c == 'T') {   /* char jump: await target */
+            cm->jump_pending = c;
+            continue;
+        }
         if (c == 'V') {                       /* linewise visual toggle */
             if (cm->sel && cm->sel_mode == 1) cm->sel = 0;
             else { cm->sel = 1; cm->sel_mode = 1; cm->anchor_line = cm->cur_line; cm->anchor_col = cm->cur_col; }
