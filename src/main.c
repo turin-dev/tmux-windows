@@ -751,6 +751,35 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* kill-pane -a closes every pane but the active one (dividers disappear). */
+static int run_selftest_killall(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) { printf("FAIL: session_create\n"); if (wake) CloseHandle(wake); return 1; }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "split-window -h ; split-window -h");   /* 3 panes */
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "\xe2\x94\x82") == NULL) { printf("FAIL: expected dividers before kill\n"); ok = 0; }
+
+    session_run(s, "kill-pane -a");
+    Sleep(150); session_pump(s);
+    session_render(s, &frame); strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "\xe2\x94\x82") != NULL) { printf("FAIL: dividers remain after kill-pane -a\n"); ok = 0; }
+
+    printf("%s\n", ok ? "KILLALL SELFTEST PASSED" : "KILLALL SELFTEST FAILED");
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* move-window relocates the current window to a new position. */
 static int run_selftest_move(void)
 {
@@ -1094,6 +1123,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_choose();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-move") == 0)
         return run_selftest_move();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-killall") == 0)
+        return run_selftest_killall();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

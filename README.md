@@ -167,7 +167,7 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
 `rotate-window [-U]`, `swap-pane [-U|-D]`, `break-pane`, `join-pane -s N [-h|-v]`,
 `paste-buffer`,
-`last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
+`last-pane`, `last-window`, `kill-pane [-a]`, `next-window`, `previous-window`,
 `select-window -t N`, `swap-window [-s a] -t b`, `move-window -t N`,
 `kill-window`,
 `rename-window <name>`,

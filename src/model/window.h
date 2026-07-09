@@ -96,6 +96,9 @@ pane_t   *window_active(window_t *w);
 /* Kill the active pane. Returns 1 if the window is now empty. */
 int       window_kill_active(window_t *w);
 
+/* Close every pane except the active one (kill-pane -a). */
+void      window_kill_others(window_t *w);
+
 /* Forward input bytes to the active pane's child. */
 void      window_write_active(window_t *w, const char *bytes, size_t n);
 

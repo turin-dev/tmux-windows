@@ -377,8 +377,13 @@ static void cmd_select_pane(session_t *s, int argc, char **argv)
 static void cmd_kill_pane(session_t *s, int argc, char **argv)
 {
     window_t *w = cur_window(s);
-    (void)argc; (void)argv;
-    if (w && window_kill_active(w)) remove_window(s, s->cur);
+    int i, all = 0;
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "-a") == 0) all = 1;
+    if (w == NULL)
+        return;
+    if (all) { window_kill_others(w); mark(s, 1); return; }
+    if (window_kill_active(w)) remove_window(s, s->cur);
     else mark(s, 1);
 }
 
@@ -847,6 +852,8 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "rename-session",  cmd_rename_session },
     { "set",             cmd_set },
     { "set-option",      cmd_set },
+    { "setw",            cmd_set },
+    { "set-window-option", cmd_set },
     { "bind",            cmd_bind },
     { "bind-key",        cmd_bind },
     { "unbind",          cmd_unbind },

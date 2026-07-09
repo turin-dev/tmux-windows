@@ -364,6 +364,27 @@ int window_kill_active(window_t *w)
     return 0;
 }
 
+void window_kill_others(window_t *w)
+{
+    pane_t *keep = w->active, *ps[TMUXW_MAX_PANES];
+    int n, i;
+    if (w->root == NULL || keep == NULL)
+        return;
+    n = layout_collect(w->root, ps, TMUXW_MAX_PANES);
+    if (n <= 1)
+        return;
+    for (i = 0; i < n; i++)
+        if (ps[i] != keep) pane_close(ps[i]);
+    layout_free(w->root, 0);            /* free nodes; panes already closed/kept */
+    w->root = layout_leaf(keep);
+    w->active = keep;
+    w->last_active = NULL;
+    w->zoomed = 0;
+    w->drag = NULL;
+    if (w->root)
+        layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
 void window_write_active(window_t *w, const char *bytes, size_t n)
 {
     if (w->active)
