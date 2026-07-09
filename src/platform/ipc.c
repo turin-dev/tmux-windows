@@ -26,6 +26,40 @@ void ipc_pipe_name(wchar_t *out, size_t cap, const wchar_t *session)
     _snwprintf_s(out, cap, _TRUNCATE, L"\\\\.\\pipe\\tmuxw-%s-%s", user, session);
 }
 
+int ipc_list_sessions(char *out, int max, int namecap)
+{
+    wchar_t user[256];
+    DWORD un = (DWORD)(sizeof(user) / sizeof(user[0]));
+    wchar_t prefix[300], pattern[512];
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    int count = 0;
+    size_t prefixlen;
+
+    if (out == NULL || max <= 0 || namecap <= 0)
+        return 0;
+    if (!GetUserNameW(user, &un))
+        wcscpy_s(user, 256, L"user");
+    _snwprintf_s(prefix, 300, _TRUNCATE, L"tmuxw-%s-", user);
+    prefixlen = wcslen(prefix);
+    _snwprintf_s(pattern, 512, _TRUNCATE, L"\\\\.\\pipe\\%s*", prefix);
+
+    h = FindFirstFileW(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    do {
+        if (wcsncmp(fd.cFileName, prefix, prefixlen) == 0) {
+            const wchar_t *sess = fd.cFileName + prefixlen;
+            char *dst = out + (size_t)count * namecap;
+            WideCharToMultiByte(CP_UTF8, 0, sess, -1, dst, namecap, NULL, NULL);
+            if (++count >= max)
+                break;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return count;
+}
+
 /* Transfer exactly `n` bytes to/from an overlapped handle, waiting for each
  * operation to complete. Returns 0 on success, -1 on EOF/error. */
 static int io_full(HANDLE h, void *buf, DWORD n, int writing)

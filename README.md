@@ -82,8 +82,14 @@ tmux                 REM attach to (or start) the default session
 tmux new             REM start a session and attach (alias: new-session)
 tmux new -s work     REM start/attach a named session
 tmux attach -t work  REM attach to an existing session (alias: a)
+tmux ls              REM list running sessions (alias: list-sessions)
+tmux kill-session -t work   REM stop a session's server
+tmux kill-server     REM stop every tmuxw session
 tmuxw --standalone   REM run in one process, no server (for debugging)
 ```
+
+Each named session is an independent background server, so sessions detach and
+reattach separately and `tmux ls` enumerates them.
 
 ### Key bindings (prefix = Ctrl-B)
 
@@ -154,9 +160,10 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
 `rotate-window [-U]`, `swap-pane [-U|-D]`, `break-pane`, `paste-buffer`,
 `last-pane`, `last-window`, `kill-pane`, `next-window`, `previous-window`,
-`select-window -t N`, `kill-window`, `rename-window <name>`, `copy-mode`,
-`detach-client`, `send-prefix`, `command-prompt`, `set <option> <value>`,
-`bind <key> <command>`, `unbind <key>`, `source-file <path>`.
+`select-window -t N`, `kill-window`, `rename-window <name>`,
+`rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
+`command-prompt`, `set <option> <value>`, `bind <key> <command>`,
+`unbind <key>`, `source-file <path>`.
 
 Layout presets for `select-layout`: `even-horizontal`, `even-vertical`,
 `main-horizontal`, `main-vertical`, `tiled` (also cycled with `Ctrl-B Space`).

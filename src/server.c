@@ -40,6 +40,7 @@ typedef struct srv_client {
     int               new_size;  /* a resize/attach is pending */
     int               cols, rows;
     volatile LONG     disconnected;
+    volatile LONG     kill;      /* client asked the server to exit */
 } srv_client_t;
 
 /* Reader thread: decode frames from the client into input / resize state. */
@@ -62,6 +63,8 @@ static DWORD WINAPI srv_reader(LPVOID arg)
             c->cols = cc;
             c->rows = rr;
             c->new_size = 1;
+        } else if (type == MSG_KILL) {
+            InterlockedExchange(&c->kill, 1);
         }
         LeaveCriticalSection(&c->lock);
         SetEvent(c->wake);
@@ -122,6 +125,12 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
         }
 
         session_tick(sess);
+
+        if (InterlockedCompareExchange(&c.kill, 0, 0)) {
+            session_ended = 1;                 /* kill-session/kill-server */
+            ipc_write_frame(pipe, MSG_EXIT, NULL, 0);
+            break;
+        }
 
         if (session_take_detach(sess)) {
             ipc_write_frame(pipe, MSG_DETACH, NULL, 0);

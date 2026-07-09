@@ -165,6 +165,63 @@ static void parse_target_and_shell(int argc, wchar_t **argv, int start,
     }
 }
 
+/* ----- session listing / killing (client side) ------------------------------ */
+
+#define SESS_MAX   64
+#define SESS_NAME  64
+
+static int list_sessions(void)
+{
+    char names[SESS_MAX * SESS_NAME];
+    int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i;
+    if (n == 0) {
+        printf("no sessions\n");
+        return 0;
+    }
+    for (i = 0; i < n; i++)
+        printf("%s\n", names + (size_t)i * SESS_NAME);
+    return 0;
+}
+
+/* Connect to a session's server and ask it to exit. Returns 0 if the request
+ * was delivered, 1 if no such session is running. */
+static int kill_one(const wchar_t *name)
+{
+    wchar_t pipename[512];
+    HANDLE pipe;
+    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
+    pipe = ipc_client_connect(pipename, 0);
+    if (pipe == INVALID_HANDLE_VALUE)
+        return 1;
+    ipc_write_frame(pipe, MSG_KILL, NULL, 0);
+    Sleep(100);                 /* let the server act before we drop the pipe */
+    CloseHandle(pipe);
+    return 0;
+}
+
+static int kill_session_cmd(const wchar_t *name)
+{
+    if (kill_one(name) != 0) {
+        fprintf(stderr, "tmux: no such session\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int kill_server_cmd(void)
+{
+    char names[SESS_MAX * SESS_NAME];
+    int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i, killed = 0;
+    for (i = 0; i < n; i++) {
+        wchar_t w[SESS_NAME * 2];
+        MultiByteToWideChar(CP_UTF8, 0, names + (size_t)i * SESS_NAME, -1, w, SESS_NAME * 2);
+        if (kill_one(w) == 0)
+            killed++;
+    }
+    printf("killed %d session(s)\n", killed);
+    return 0;
+}
+
 /* ----- headless self-tests -------------------------------------------------- */
 
 typedef struct collect_ctx {
@@ -787,10 +844,19 @@ int wmain(int argc, wchar_t **argv)
             wcscmp(sub, L"a") == 0)
             return attach_session(name, default_shell(), 0);
 
+        if (wcscmp(sub, L"ls") == 0 || wcscmp(sub, L"list-sessions") == 0)
+            return list_sessions();
+
+        if (wcscmp(sub, L"kill-session") == 0)
+            return kill_session_cmd(name);
+
+        if (wcscmp(sub, L"kill-server") == 0)
+            return kill_server_cmd();
+
         fprintf(stderr, "tmux: unknown command: %ls\n", sub);
         fprintf(stderr,
-                "usage: tmux [new|new-session|attach|attach-session|a] "
-                "[-s|-t name] [command]\n");
+                "usage: tmux [new|new-session|attach|attach-session|a|ls|"
+                "kill-session|kill-server] [-s|-t name] [command]\n");
         return 1;
     }
 

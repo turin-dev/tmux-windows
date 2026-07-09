@@ -21,6 +21,7 @@ enum {
     MSG_ATTACH = 1,
     MSG_INPUT  = 2,
     MSG_RESIZE = 3,
+    MSG_KILL   = 4,   /* client -> server: end the session/server now */
     MSG_OUTPUT = 10,
     MSG_DETACH = 11,
     MSG_EXIT   = 12
@@ -28,6 +29,11 @@ enum {
 
 /* Build the pipe name for a session (e.g. "default") into `out`. */
 void ipc_pipe_name(wchar_t *out, size_t cap, const wchar_t *session);
+
+/* List running tmuxw sessions for the current user by enumerating named pipes.
+ * Writes up to `max` NUL-terminated session names (UTF-8) into `out`, each up to
+ * `namecap` bytes. Returns the count found. */
+int ipc_list_sessions(char *out, int max, int namecap);
 
 /* Write one frame. Returns 0 on success, non-zero on I/O error. */
 int ipc_write_frame(HANDLE h, unsigned char type, const void *payload, uint32_t len);

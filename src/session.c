@@ -431,6 +431,11 @@ static void cmd_rename_window(session_t *s, int argc, char **argv)
     if (w && argc > 1) { strncpy_s(w->name, sizeof(w->name), argv[1], _TRUNCATE); mark(s, 1); }
 }
 
+static void cmd_rename_session(session_t *s, int argc, char **argv)
+{
+    if (argc > 1) { strncpy_s(s->name, sizeof(s->name), argv[1], _TRUNCATE); mark(s, 1); }
+}
+
 static void cmd_set(session_t *s, int argc, char **argv)
 {
     int i = 1;
@@ -525,6 +530,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "copy-mode",       cmd_copymode },
     { "send-prefix",     cmd_send_prefix },
     { "rename-window",   cmd_rename_window },
+    { "rename-session",  cmd_rename_session },
     { "set",             cmd_set },
     { "set-option",      cmd_set },
     { "bind",            cmd_bind },
