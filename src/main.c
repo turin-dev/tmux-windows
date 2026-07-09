@@ -751,6 +751,36 @@ static int run_selftest_break(void)
     return ok ? 0 : 1;
 }
 
+/* move-window relocates the current window to a new position. */
+static int run_selftest_move(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) { printf("FAIL: session_create\n"); if (wake) CloseHandle(wake); return 1; }
+    strbuf_init(&frame);
+    Sleep(200);
+    session_pump(s);
+
+    session_run(s, "rename-window W0");
+    session_run(s, "new-window ; rename-window W1");
+    session_run(s, "new-window ; rename-window W2");   /* current = W2 at index 2 */
+    session_run(s, "move-window -t 0");                 /* W2 -> index 0 */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+
+    if (strstr(frame.data, "0:W2*") == NULL) { printf("FAIL: window not moved to index 0\n"); ok = 0; }
+    if (strstr(frame.data, "1:W0") == NULL)  { printf("FAIL: other windows not shifted\n"); ok = 0; }
+
+    printf("%s\n", ok ? "MOVE SELFTEST PASSED" : "MOVE SELFTEST FAILED");
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* choose-window: navigate the picker with k and select window 0 with Enter. */
 static int run_selftest_choose(void)
 {
@@ -1062,6 +1092,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_shell();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-choose") == 0)
         return run_selftest_choose();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-move") == 0)
+        return run_selftest_move();
     if (argc > 1 && wcscmp(argv[1], L"--selftest") == 0)
         return run_selftest(argc, argv);
 

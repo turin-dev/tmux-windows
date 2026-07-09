@@ -567,6 +567,28 @@ static void cmd_kill_window(session_t *s, int argc, char **argv)
     kill_window(s);
 }
 
+static void cmd_move_window(session_t *s, int argc, char **argv)
+{
+    int dst = -1, i;
+    window_t *cur;
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) dst = atoi(argv[++i]) - s->base_index;
+    if (dst < 0 || dst == s->cur)
+        return;
+    cur = s->windows[s->cur];
+    for (i = s->cur; i < s->nwindows - 1; i++)   /* pull the window out */
+        s->windows[i] = s->windows[i + 1];
+    s->nwindows--;
+    if (dst > s->nwindows) dst = s->nwindows;
+    for (i = s->nwindows; i > dst; i--)          /* open a slot at dst */
+        s->windows[i] = s->windows[i - 1];
+    s->windows[dst] = cur;
+    s->nwindows++;
+    s->cur = dst;
+    s->last_window = -1;
+    mark(s, 1);
+}
+
 static void cmd_swap_window(session_t *s, int argc, char **argv)
 {
     int a = s->cur, b = -1, i;
@@ -815,6 +837,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "previous-window", cmd_prev_window },
     { "select-window",   cmd_select_window },
     { "swap-window",     cmd_swap_window },
+    { "move-window",     cmd_move_window },
     { "kill-window",     cmd_kill_window },
     { "detach-client",   cmd_detach },
     { "copy-mode",       cmd_copymode },
