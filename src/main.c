@@ -71,27 +71,156 @@ static void disinherit_std_handles(void)
     }
 }
 
+/* Run `exe args` hidden, wait up to 10s, and return its exit code (or a
+ * Win32 error code if it could not even be started). */
+static int run_hidden(const wchar_t *exe, const wchar_t *args)
+{
+    wchar_t cmd[CMD_MAX + 256];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD code = 1;
+
+    _snwprintf_s(cmd, CMD_MAX + 256, _TRUNCATE, L"%s %s", exe, args);
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi))
+        return (int)GetLastError();
+
+    WaitForSingleObject(pi.hProcess, 10000);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)code;
+}
+
+/* Escape `in` for embedding inside an already-quoted schtasks /tr value, per
+ * the scheme documented for schtasks: each literal '"' becomes '\"'. */
+static void escape_quotes(const wchar_t *in, wchar_t *out, size_t out_cap)
+{
+    size_t i, j = 0, n = wcslen(in);
+    for (i = 0; i < n && j + 2 < out_cap; i++) {
+        if (in[i] == L'"') {
+            out[j++] = L'\\';
+            out[j++] = L'"';
+        } else {
+            out[j++] = in[i];
+        }
+    }
+    out[j] = L'\0';
+}
+
+/* Launch `cmd` via the Task Scheduler service so the resulting process is not
+ * a member of any job the caller belongs to. The Schedule service (running
+ * independently as SYSTEM) creates the target process itself, so it is never
+ * a descendant of our process tree at all -- unlike CREATE_BREAKAWAY_FROM_JOB,
+ * this works even when the enclosing job denies breakaway, which is exactly
+ * how Win32-OpenSSH's per-session job is configured. Returns 0 if the task
+ * was created and run (the target process is presumed launched); nonzero on
+ * failure, in which case the caller should fall back to a direct spawn. */
+static int spawn_via_scheduled_task(const wchar_t *cmd)
+{
+    wchar_t taskname[64];
+    wchar_t escaped[CMD_MAX + 16];
+    wchar_t args[CMD_MAX + 256];
+    wchar_t sttime[8];
+    SYSTEMTIME st;
+    unsigned total, hh, mm;
+
+    _snwprintf_s(taskname, 64, _TRUNCATE, L"tmuxw-srv-%lu-%lu",
+                 (unsigned long)GetCurrentProcessId(), GetTickCount());
+
+    GetLocalTime(&st);
+    total = (unsigned)st.wHour * 60u + (unsigned)st.wMinute + 1u; /* avoid a start time already past */
+    hh = (total / 60u) % 24u;
+    mm = total % 60u;
+    _snwprintf_s(sttime, 8, _TRUNCATE, L"%02u:%02u", hh, mm);
+
+    escape_quotes(cmd, escaped, CMD_MAX + 16);
+    _snwprintf_s(args, CMD_MAX + 256, _TRUNCATE,
+                L"/create /tn \"%s\" /tr \"%s\" /sc once /st %s /f",
+                taskname, escaped, sttime);
+    if (run_hidden(L"schtasks.exe", args) != 0)
+        return -1;
+
+    _snwprintf_s(args, CMD_MAX + 256, _TRUNCATE, L"/run /tn \"%s\"", taskname);
+    if (run_hidden(L"schtasks.exe", args) != 0) {
+        _snwprintf_s(args, CMD_MAX + 256, _TRUNCATE, L"/delete /tn \"%s\" /f", taskname);
+        run_hidden(L"schtasks.exe", args);
+        return -1;
+    }
+
+    Sleep(300);   /* give the Schedule service a moment to launch the target */
+    _snwprintf_s(args, CMD_MAX + 256, _TRUNCATE, L"/delete /tn \"%s\" /f", taskname);
+    run_hidden(L"schtasks.exe", args);   /* the task definition, not the process it launched */
+    return 0;
+}
+
 /* Launch the background server process for `pipename`. On success, if
  * out_process is non-NULL, receives the server process handle (caller closes);
- * otherwise the handle is closed here. Returns 0 on success. */
+ * otherwise the handle is closed here. Returns 0 on success.
+ *
+ * SSH servers on Windows (OpenSSH's sshd in particular) commonly put a login
+ * session's whole process tree into a Job Object with
+ * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, so that everything spawned during the
+ * session is torn down when it ends. Without countermeasures, that would take
+ * our detached server down the moment the SSH connection drops -- exactly the
+ * scenario a detachable session exists to survive. We try, in order:
+ *   1. A plain spawn when we're not in a job at all (the common local case).
+ *   2. CREATE_BREAKAWAY_FROM_JOB, in case the job allows it.
+ *   3. Task Scheduler (see spawn_via_scheduled_task): Win32-OpenSSH's session
+ *      job does NOT set JOB_OBJECT_LIMIT_BREAKAWAY_OK, so (2) reliably fails
+ *      for the exact scenario we care about (an interactive SSH session) --
+ *      this is the fallback that actually survives disconnect there.
+ *   4. A plain in-job spawn, so a session still starts even if every escape
+ *      attempt failed (better than refusing to run at all).
+ * Because (3) launches the process via the Schedule service rather than as
+ * our own child, no process handle is available for it; *out_process is set
+ * to NULL in that case. */
 static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell, HANDLE *out_process)
 {
     wchar_t exe[MAX_PATH];
     wchar_t cmd[CMD_MAX];
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
+    DWORD flags = CREATE_NO_WINDOW | DETACHED_PROCESS;
+    BOOL in_job = FALSE;
+    BOOL ok;
 
     if (GetModuleFileNameW(NULL, exe, MAX_PATH) == 0)
         return (int)GetLastError();
 
     _snwprintf_s(cmd, CMD_MAX, _TRUNCATE, L"\"%s\" --server %s %s", exe, pipename, shell);
 
+    if (!IsProcessInJob(GetCurrentProcess(), NULL, &in_job))
+        in_job = FALSE;
+
+    if (in_job)
+        flags |= CREATE_BREAKAWAY_FROM_JOB;
+
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
+    ok = CreateProcessW(NULL, cmd, NULL, NULL, FALSE, flags, NULL, NULL, &si, &pi);
 
-    if (!CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
-                        CREATE_NO_WINDOW | DETACHED_PROCESS, NULL, NULL, &si, &pi))
+    if (!ok && in_job) {
+        /* Breakaway refused: escape the job entirely via Task Scheduler. */
+        if (spawn_via_scheduled_task(cmd) == 0) {
+            if (out_process) *out_process = NULL;
+            return 0;
+        }
+        /* Scheduler unavailable too: settle for a session that works locally
+         * even if it won't survive this job being torn down. */
+        flags &= ~CREATE_BREAKAWAY_FROM_JOB;
+        ZeroMemory(&pi, sizeof(pi));
+        ok = CreateProcessW(NULL, cmd, NULL, NULL, FALSE, flags, NULL, NULL, &si, &pi);
+    }
+    if (!ok)
         return (int)GetLastError();
 
     CloseHandle(pi.hThread);
