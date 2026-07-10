@@ -49,6 +49,7 @@ window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
     w->cols = cols;
     w->rows = rows;
     w->next_pane_id = 1;
+    w->refcount = 1;
     derive_name(w->name, sizeof(w->name), shell);
 
     first = pane_create(w->next_pane_id++, shell, cols, rows, wake, cwd, envblock);
@@ -62,10 +63,19 @@ window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
     return w;
 }
 
+window_t *window_link(window_t *w)
+{
+    if (w != NULL)
+        w->refcount++;
+    return w;
+}
+
 void window_free(window_t *w)
 {
     if (w == NULL)
         return;
+    if (--w->refcount > 0)
+        return;               /* still referenced from another index */
     if (w->root)
         layout_free(w->root, 1);
     free(w);
@@ -84,6 +94,7 @@ window_t *window_create_with_pane(pane_t *p, int cols, int rows, const char *nam
     w->cols = cols;
     w->rows = rows;
     w->next_pane_id = 2;
+    w->refcount = 1;
     strncpy_s(w->name, sizeof(w->name), (name && name[0]) ? name : "win", _TRUNCATE);
     w->root = layout_leaf(p);
     if (w->root == NULL) { free(w); return NULL; }

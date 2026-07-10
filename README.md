@@ -212,6 +212,7 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `last-pane`, `last-window`, `kill-pane [-a]`, `next-window`, `previous-window`,
 `select-window -t N`, `swap-window [-s a] -t b`, `move-window -t N`,
 `kill-window`,
+`link-window [-s src] [-t dst]`, `unlink-window [-t idx]`,
 `rename-window <name>`,
 `rename-session <name>`, `copy-mode`, `detach-client`, `send-prefix`,
 `send-keys <keys...>`, `display-panes`, `choose-window`, `display-message <text>`,
@@ -254,6 +255,11 @@ accepted (for script/shebang compatibility) and are no-ops: color depth and
 encoding are whatever the terminal's own VT support is, since tmuxw passes
 escape sequences straight through rather than reinterpreting them.
 
+`link-window` inserts a second reference to the same window at another
+index, within one session: both indices show the exact same live window,
+so a rename (or anything else) via either index is visible via the other,
+and `unlink-window` on one index leaves the other fully intact.
+
 Paste buffers are a small internal stack (newest on top), separate from but
 kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`
 push a new buffer; `paste-buffer` prefers the top of that stack and falls
@@ -291,6 +297,7 @@ build\tmuxw.exe --selftest-ipc            REM full server/client round trip
 build\tmuxw.exe --selftest-cmdipc         REM one-off commands against a detached session
 build\tmuxw.exe --selftest-attachd        REM attach -d kicks an already-attached client
 build\tmuxw.exe --selftest-switch         REM switch-client sends MSG_SWITCH to the right target
+build\tmuxw.exe --selftest-link           REM link-window shares one window across two indices
 build\tmuxw.exe --selftest-confirm        REM confirm-before y/n gate + capture-pane/clear-history/previous-layout
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session

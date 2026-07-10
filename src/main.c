@@ -28,6 +28,7 @@
  *   tmux --selftest-cmdipc                headless: one-off commands vs. a detached session
  *   tmux --selftest-attachd               headless: attach -d kicks an attached client
  *   tmux --selftest-switch                headless: switch-client sends MSG_SWITCH
+ *   tmux --selftest-link                  headless: link-window shares one window across two indices
  *   tmux --selftest-confirm               headless: confirm-before, capture-pane, etc.
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
@@ -1698,6 +1699,83 @@ static int run_selftest_options(void)
     return ok ? 0 : 1;
 }
 
+/* link-window inserts a second, live reference to the same window_t (via
+ * refcounting) at another index: renaming it via one index must be visible
+ * through the other, and unlink-window on one index must leave the other
+ * fully alive (not a dangling/freed window). */
+static int run_selftest_link(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(250);
+    session_pump(s);
+
+    session_run(s, "new-window");            /* windows: 0:cmd, 1:cmd(cur) */
+    session_run(s, "link-window -s 0 -t 2");  /* window 0 now ALSO at index 2 */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "0:cmd") == NULL || strstr(frame.data, "2:cmd") == NULL) {
+        printf("FAIL: link-window did not create a second reference\n");
+        ok = 0;
+    }
+    if (strstr(frame.data, "1:cmd*") == NULL) {
+        printf("FAIL: link-window shifted the current window's index\n");
+        ok = 0;
+    }
+
+    /* Rename via index 2; index 0 (the same underlying window) must show it too. */
+    session_run(s, "select-window -t 2");
+    session_run(s, "rename-window SHARED");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "0:SHARED") == NULL || strstr(frame.data, "2:SHARED*") == NULL) {
+        printf("FAIL: rename via the linked index wasn't reflected at the original index\n");
+        ok = 0;
+    }
+
+    /* Unlink index 2: index 0's window must survive untouched (no crash, no
+     * garbage -- proves window_free's refcount didn't over-free). */
+    session_run(s, "unlink-window -t 2");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "0:SHARED") == NULL) {
+        printf("FAIL: original index lost the window after unlinking the other\n");
+        ok = 0;
+    }
+    if (strstr(frame.data, "2:") != NULL) {
+        printf("FAIL: unlinked index still present\n");
+        ok = 0;
+    }
+
+    /* And the surviving window must still be a live, working pane. */
+    session_run(s, "select-window -t 0");
+    session_input(s, "echo LINKALIVE\r", (size_t)strlen("echo LINKALIVE\r"));
+    Sleep(600);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "LINKALIVE") == NULL) {
+        printf("FAIL: surviving linked window's pane is not actually alive\n");
+        ok = 0;
+    }
+
+    printf("%s\n", ok ? "LINK SELFTEST PASSED" : "LINK SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* switch-client asks the attached client to reconnect to a different
  * session's pipe. This exercises the server-side half of that protocol
  * (session.c's switch_pending state -> server.c sending MSG_SWITCH): attach
@@ -1874,6 +1952,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_attachd();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-switch") == 0)
         return run_selftest_switch();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-link") == 0)
+        return run_selftest_link();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-windows") == 0)
         return run_selftest_windows();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-copymode") == 0)

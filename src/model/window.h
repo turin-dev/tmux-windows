@@ -25,6 +25,11 @@ typedef struct window {
     int            layout;         /* last-applied LAYOUT_* preset (for cycling) */
     layout_node_t *drag;           /* divider being dragged with the mouse, or NULL */
     char           name[64];       /* display name (derived from the shell) */
+    int            refcount;       /* live references, see window_link/window_free;
+                                    * link-window inserts a second reference to the
+                                    * SAME window_t at another index instead of
+                                    * copying it, so both indices show one shared,
+                                    * live window exactly like tmux's window objects */
 } window_t;
 
 /* Create a window with one pane running `shell`, starting in `cwd` (NULL/empty
@@ -33,7 +38,14 @@ typedef struct window {
  * Returns NULL on failure. */
 window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
                         const wchar_t *cwd, const wchar_t *envblock);
+/* Drop one reference; frees the window once its refcount reaches zero (see
+ * window_link). Safe to call on NULL. */
 void      window_free(window_t *w);
+/* Take a second reference to `w` for link-window: returns `w` with its
+ * refcount incremented, so inserting the result at another index makes both
+ * indices show the exact same live window (shared panes/state), and
+ * unlinking (window_free) either one leaves the other unaffected. */
+window_t *window_link(window_t *w);
 
 /* Wrap an already-running pane in a fresh window (used by break-pane). Takes
  * ownership of `p`. Returns NULL on failure (the caller then owns `p`). */

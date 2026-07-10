@@ -1007,6 +1007,49 @@ static void cmd_kill_window(session_t *s, int argc, char **argv)
     kill_window(s);
 }
 
+/* link-window [-s src] [-t dst]: insert a *second reference* to the source
+ * window (default: current) at the destination index (default: the end),
+ * via window_link()'s refcount -- both indices then show the exact same
+ * live window (shared panes/active-pane/etc.), same as tmux's window
+ * objects being referenced from more than one place. Limited to within this
+ * session: a window can't be shared with a different session here, since
+ * each session is an independent server process with no shared pane
+ * ownership across processes. */
+static void cmd_link_window(session_t *s, int argc, char **argv)
+{
+    int i, src = s->cur, dst = -1;
+    window_t *w;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) src = atoi(argv[++i]) - s->base_index;
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) dst = atoi(argv[++i]) - s->base_index;
+    }
+    if (src < 0 || src >= s->nwindows || s->nwindows >= MAX_WINDOWS)
+        return;
+    if (dst < 0 || dst > s->nwindows)
+        dst = s->nwindows;   /* default: append */
+
+    w = window_link(s->windows[src]);
+    for (i = s->nwindows; i > dst; i--)   /* open a slot at dst */
+        s->windows[i] = s->windows[i - 1];
+    s->windows[dst] = w;
+    s->nwindows++;
+    if (dst <= s->cur)
+        s->cur++;   /* keep tracking the same window as it shifted right */
+    mark(s, 1);
+}
+
+/* unlink-window [-t idx]: remove one index's reference to a window (default:
+ * current). remove_window()/window_free() are refcount-aware, so if that
+ * window is still linked at another index in this session, its panes stay
+ * alive and untouched -- only this reference goes away. */
+static void cmd_unlink_window(session_t *s, int argc, char **argv)
+{
+    int i, idx = s->cur;
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) idx = atoi(argv[++i]) - s->base_index;
+    remove_window(s, idx);
+}
+
 static void cmd_move_window(session_t *s, int argc, char **argv)
 {
     int dst = -1, i;
@@ -1653,6 +1696,8 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "swap-window",     cmd_swap_window },
     { "move-window",     cmd_move_window },
     { "kill-window",     cmd_kill_window },
+    { "link-window",     cmd_link_window },
+    { "unlink-window",   cmd_unlink_window },
     { "detach-client",   cmd_detach },
     { "suspend-client",  cmd_detach },
     { "switch-client",   cmd_switch_client },
