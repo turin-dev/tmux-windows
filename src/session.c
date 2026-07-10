@@ -76,6 +76,8 @@ struct session {
     int             changed;
     int             quit;
     int             detach;
+    int             switch_pending;   /* switch-client requested */
+    char            switch_target[64];
     int             last_min;
     copymode_t      copy;
     /* options */
@@ -1052,6 +1054,23 @@ static void cmd_detach(session_t *s, int argc, char **argv)
     s->detach = 1;
 }
 
+/* switch-client -t <session>: ask the attached client to reconnect to a
+ * different session in place (see session_take_switch / client.c), rather
+ * than detaching and requiring the user to run `tmux attach` again. */
+static void cmd_switch_client(session_t *s, int argc, char **argv)
+{
+    int i;
+    const char *target = NULL;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) target = argv[++i];
+        else if (target == NULL) target = argv[i];
+    }
+    if (target == NULL)
+        return;
+    strncpy_s(s->switch_target, sizeof(s->switch_target), target, _TRUNCATE);
+    s->switch_pending = 1;
+}
+
 static void cmd_copymode(session_t *s, int argc, char **argv)
 {
     window_t *w = cur_window(s);
@@ -1239,6 +1258,42 @@ static void cmd_choose_client(session_t *s, int argc, char **argv)
         show_message(s, "1 client attached (this one)");
     else
         show_message(s, "no client attached");
+}
+
+/* refresh-client: force a full repaint, e.g. after the terminal was garbled
+ * by something outside tmuxw's control. */
+static void cmd_refresh_client(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    session_force_redraw(s);
+}
+
+/* resize-window [-x width] [-y height]: set an explicit window size. Since a
+ * session here has exactly one attached client at a time and that client's
+ * own terminal size is re-applied on every attach/resize (unlike real
+ * tmux's multi-client "largest client" negotiation), this mostly matters for
+ * a detached session -- it holds until the next client attaches (or resizes
+ * its terminal), at which point that size takes over again. */
+static void cmd_resize_window(session_t *s, int argc, char **argv)
+{
+    int i, cols = -1, rows = -1;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-x") == 0 && i + 1 < argc) cols = atoi(argv[++i]);
+        else if (strcmp(argv[i], "-y") == 0 && i + 1 < argc) rows = atoi(argv[++i]);
+    }
+    if (cols > 0 || rows > 0)
+        session_resize(s, cols > 0 ? cols : s->cols, rows > 0 ? rows : s->rows);
+}
+
+/* lock-session / lock-client / lock-server: tmux locks the terminal behind
+ * an external unlock command; the closest real equivalent on Windows is
+ * locking the workstation outright (broader than just this session, but the
+ * same practical intent -- require re-authentication before anyone can see
+ * what was on screen). */
+static void cmd_lock(session_t *s, int argc, char **argv)
+{
+    (void)s; (void)argc; (void)argv;
+    LockWorkStation();
 }
 
 static void cmd_run_shell(session_t *s, int argc, char **argv)
@@ -1599,6 +1654,8 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "move-window",     cmd_move_window },
     { "kill-window",     cmd_kill_window },
     { "detach-client",   cmd_detach },
+    { "suspend-client",  cmd_detach },
+    { "switch-client",   cmd_switch_client },
     { "copy-mode",       cmd_copymode },
     { "send-prefix",     cmd_send_prefix },
     { "send-keys",       cmd_send_keys },
@@ -1619,6 +1676,12 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "choose-tree",     cmd_choose_window },
     { "choose-buffer",   cmd_choose_buffer },
     { "choose-client",   cmd_choose_client },
+    { "refresh-client",  cmd_refresh_client },
+    { "resize-window",   cmd_resize_window },
+    { "lock-session",    cmd_lock },
+    { "lock-client",     cmd_lock },
+    { "lock-server",     cmd_lock },
+    { "lock",            cmd_lock },
     { "display-message", cmd_display_message },
     { "run-shell",       cmd_run_shell },
     { "if-shell",        cmd_if_shell },
@@ -2396,6 +2459,15 @@ int session_take_detach(session_t *s)
     int d = s->detach;
     s->detach = 0;
     return d;
+}
+
+int session_take_switch(session_t *s, char *out, size_t outcap)
+{
+    if (!s->switch_pending)
+        return 0;
+    s->switch_pending = 0;
+    strncpy_s(out, outcap, s->switch_target, _TRUNCATE);
+    return 1;
 }
 
 /* Run each non-comment line of a config file as a command. */

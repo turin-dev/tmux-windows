@@ -229,7 +229,9 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `list-clients` (alias `lsc`),
 `set-environment [-u] <name> [value]`, `show-environment`, `unset-environment <name>`,
 `choose-buffer`, `choose-client`, `set-hook [-u] <event> <command>`, `show-hooks`,
-`wait-for [-S|-L|-U] <channel>`.
+`wait-for [-S|-L|-U] <channel>`, `switch-client -t <session>`, `suspend-client`,
+`refresh-client`, `resize-window [-x width] [-y height]`,
+`lock-session` / `lock-client` / `lock-server` / `lock`.
 
 `set-environment` overrides apply to panes created from then on (`new-window`,
 `split-window`), not retroactively to already-running ones, matching tmux.
@@ -243,6 +245,14 @@ fire on their own.
 elsewhere against the same session — the server itself never blocks (that
 would freeze the session for anyone attached to it), so the CLI polls
 underneath.
+
+`switch-client -t <session>` reconnects an attached client to a different
+session's server in place, without detaching first. `lock-*` locks the
+Windows workstation (`LockWorkStation`) — broader than tmux's per-terminal
+lock, but the same practical intent. Global `-2` / `-8` / `-u` / `-q` are
+accepted (for script/shebang compatibility) and are no-ops: color depth and
+encoding are whatever the terminal's own VT support is, since tmuxw passes
+escape sequences straight through rather than reinterpreting them.
 
 Paste buffers are a small internal stack (newest on top), separate from but
 kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`
@@ -280,6 +290,7 @@ build\tmuxw.exe --selftest-split          REM two panes + layout + compositor
 build\tmuxw.exe --selftest-ipc            REM full server/client round trip
 build\tmuxw.exe --selftest-cmdipc         REM one-off commands against a detached session
 build\tmuxw.exe --selftest-attachd        REM attach -d kicks an already-attached client
+build\tmuxw.exe --selftest-switch         REM switch-client sends MSG_SWITCH to the right target
 build\tmuxw.exe --selftest-confirm        REM confirm-before y/n gate + capture-pane/clear-history/previous-layout
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session

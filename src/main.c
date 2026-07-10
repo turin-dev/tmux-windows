@@ -27,6 +27,7 @@
  *   tmux --selftest-ipc                   headless: full server/client round trip
  *   tmux --selftest-cmdipc                headless: one-off commands vs. a detached session
  *   tmux --selftest-attachd               headless: attach -d kicks an attached client
+ *   tmux --selftest-switch                headless: switch-client sends MSG_SWITCH
  *   tmux --selftest-confirm               headless: confirm-before, capture-pane, etc.
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
@@ -349,7 +350,7 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
         CloseHandle(pipe);   /* session already running; -d is a no-op here */
         return 0;
     }
-    return run_client(pipe);
+    return run_client(pipe, g_namespace);
 }
 
 /* Parsed arguments for a client subcommand (new-session, attach, kill-session,
@@ -1697,6 +1698,90 @@ static int run_selftest_options(void)
     return ok ? 0 : 1;
 }
 
+/* switch-client asks the attached client to reconnect to a different
+ * session's pipe. This exercises the server-side half of that protocol
+ * (session.c's switch_pending state -> server.c sending MSG_SWITCH): attach
+ * a raw client to session A, run `switch-client -t B` against A over its cmd
+ * pipe, and confirm the attached connection receives MSG_SWITCH naming B
+ * instead of further output. (client.c's reconnect-in-place loop that
+ * consumes MSG_SWITCH is exercised by every other selftest that attaches at
+ * all, just never told to switch -- it's the same run_one_attach() path.) */
+static int run_selftest_switch(void)
+{
+    wchar_t pipenameA[512], cmdpipenameA[512], pipenameB[512];
+    HANDLE serverA = NULL, serverB = NULL, pipeA;
+    unsigned char sz[4], type;
+    strbuf_t payload;
+    int ok = 1;
+
+    ipc_pipe_name(pipenameA, 512, L"switchtestA");
+    ipc_cmd_pipe_name(cmdpipenameA, 512, L"switchtestA");
+    ipc_pipe_name(pipenameB, 512, L"switchtestB");
+
+    if (spawn_server_ex(pipenameA, L"cmd.exe", NULL, 0, 0, NULL, &serverA) != 0 ||
+        spawn_server_ex(pipenameB, L"cmd.exe", NULL, 0, 0, NULL, &serverB) != 0) {
+        printf("FAIL: could not spawn servers\n");
+        if (serverA) { TerminateProcess(serverA, 1); CloseHandle(serverA); }
+        if (serverB) { TerminateProcess(serverB, 1); CloseHandle(serverB); }
+        return 1;
+    }
+    Sleep(300);
+
+    pipeA = ipc_client_connect(pipenameA, 3000);
+    if (pipeA == INVALID_HANDLE_VALUE) {
+        printf("FAIL: could not attach to session A\n");
+        ok = 0;
+    } else {
+        ipc_pack_size(sz, 80, 25);
+        ipc_write_frame(pipeA, MSG_ATTACH, sz, 4);
+
+        if (send_one_cmd(cmdpipenameA, "switch-client -t switchtestB") != 0) {
+            printf("FAIL: switch-client command not acked\n");
+            ok = 0;
+        }
+
+        strbuf_init(&payload);
+        ok = ok && 1;
+        {
+            int got_switch = 0;
+            DWORD deadline = GetTickCount() + 3000;
+            while (GetTickCount() < deadline) {
+                if (ipc_read_frame(pipeA, &type, &payload) != 0)
+                    break;
+                if (type == MSG_SWITCH) {
+                    got_switch = 1;
+                    if (payload.len == 0 || strncmp(payload.data, "switchtestB", payload.len) != 0) {
+                        printf("FAIL: MSG_SWITCH target mismatch\n");
+                        ok = 0;
+                    }
+                    break;
+                }
+                /* MSG_OUTPUT frames from the shell starting up: keep reading. */
+            }
+            if (!got_switch) { printf("FAIL: never received MSG_SWITCH\n"); ok = 0; }
+        }
+        strbuf_free(&payload);
+        CancelIoEx(pipeA, NULL);
+        CloseHandle(pipeA);
+    }
+
+    printf("%s\n", ok ? "SWITCH SELFTEST PASSED" : "SWITCH SELFTEST FAILED");
+
+    kill_one(L"switchtestA");
+    kill_one(L"switchtestB");
+    if (serverA) {
+        if (WaitForSingleObject(serverA, 1000) != WAIT_OBJECT_0)
+            TerminateProcess(serverA, 0);
+        CloseHandle(serverA);
+    }
+    if (serverB) {
+        if (WaitForSingleObject(serverB, 1000) != WAIT_OBJECT_0)
+            TerminateProcess(serverB, 0);
+        CloseHandle(serverB);
+    }
+    return ok ? 0 : 1;
+}
+
 /* confirm-before shows a message and gates a command behind y/n: 'n' (or
  * anything but y/Y) cancels, y/Y runs it. Also exercises capture-pane,
  * clear-history, and previous-layout, which don't have a dedicated selftest
@@ -1787,6 +1872,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_cmdipc();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-attachd") == 0)
         return run_selftest_attachd();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-switch") == 0)
+        return run_selftest_switch();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-windows") == 0)
         return run_selftest_windows();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-copymode") == 0)
@@ -1868,18 +1955,29 @@ int wmain(int argc, wchar_t **argv)
      *   -L <name> / -S <path>
      *              an independent namespace of sessions (tmux's -L/-S;
      *              see g_namespace/ns_session_name for how Windows named
-     *              pipes stand in for tmux's separate server sockets) */
+     *              pipes stand in for tmux's separate server sockets)
+     *   -2 / -8 / -u / -q
+     *              accepted for script/shebang compatibility and otherwise
+     *              no-ops here: color depth (-2/-8) and encoding (-u) are
+     *              whatever the terminal's own VT support is, since tmuxw
+     *              passes escape sequences straight through rather than
+     *              reinterpreting them; -q (quiet startup messages) has no
+     *              startup messages to suppress in the first place */
     {
         int subidx = 1;
         const wchar_t *cfgfile = NULL;
 
-        while (subidx + 1 < argc) {
-            if (wcscmp(argv[subidx], L"-f") == 0) {
+        while (subidx < argc) {
+            if (wcscmp(argv[subidx], L"-f") == 0 && subidx + 1 < argc) {
                 cfgfile = argv[subidx + 1];
                 subidx += 2;
-            } else if (wcscmp(argv[subidx], L"-L") == 0 || wcscmp(argv[subidx], L"-S") == 0) {
+            } else if ((wcscmp(argv[subidx], L"-L") == 0 || wcscmp(argv[subidx], L"-S") == 0) &&
+                      subidx + 1 < argc) {
                 wcscpy_s(g_namespace, 256, argv[subidx + 1]);
                 subidx += 2;
+            } else if (wcscmp(argv[subidx], L"-2") == 0 || wcscmp(argv[subidx], L"-8") == 0 ||
+                      wcscmp(argv[subidx], L"-u") == 0 || wcscmp(argv[subidx], L"-q") == 0) {
+                subidx += 1;
             } else {
                 break;
             }

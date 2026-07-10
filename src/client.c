@@ -13,6 +13,8 @@ typedef struct client {
     HANDLE        pipe;
     winterm_t    *term;
     volatile LONG quit;
+    volatile LONG switching;        /* MSG_SWITCH received */
+    char          switch_target[256]; /* target session name, UTF-8 */
 } client_t;
 
 /* Reader thread: server output frames -> host terminal. */
@@ -29,6 +31,13 @@ static DWORD WINAPI client_reader(LPVOID arg)
         if (type == MSG_OUTPUT) {
             DWORD w = 0;
             WriteFile(c->term->out, payload.data, (DWORD)payload.len, &w, NULL);
+        } else if (type == MSG_SWITCH) {
+            size_t n = payload.len < sizeof(c->switch_target) - 1
+                       ? payload.len : sizeof(c->switch_target) - 1;
+            memcpy(c->switch_target, payload.data, n);
+            c->switch_target[n] = '\0';
+            InterlockedExchange(&c->switching, 1);
+            break;
         } else if (type == MSG_DETACH || type == MSG_EXIT) {
             break;
         }
@@ -56,33 +65,28 @@ static DWORD WINAPI client_input(LPVOID arg)
     return 0;
 }
 
-int run_client(HANDLE pipe)
+/* Serve one connected pipe (already the caller's to close) until detach,
+ * exit, the pipe breaking, or a switch-client request. Returns 0 in the
+ * first three cases (caller cleans up and returns); returns 1 if a switch
+ * was requested, with `switch_target` filled in (UTF-8, NUL-terminated). */
+static int run_one_attach(HANDLE pipe, winterm_t *term, char *switch_target, size_t switch_target_cap)
 {
-    winterm_t term;
     client_t c;
     HANDLE h_reader, h_input;
     unsigned char sz[4];
-    short cols = 80, rows = 25, pc, pr;
+    short cols, rows, pc, pr;
 
-    if (winterm_enable(&term) != 0) {
-        fprintf(stderr, "tmuxw: failed to set up console\n");
-        CloseHandle(pipe);
-        return 1;
-    }
-    winterm_size(&term, &cols, &rows);
+    winterm_size(term, &cols, &rows);
     pc = cols; pr = rows;
 
+    memset(&c, 0, sizeof(c));
     c.pipe = pipe;
-    c.term = &term;
-    c.quit = 0;
+    c.term = term;
 
     /* Announce our size, then start relaying. */
     ipc_pack_size(sz, cols, rows);
-    if (ipc_write_frame(pipe, MSG_ATTACH, sz, 4) != 0) {
-        winterm_restore(&term);
-        CloseHandle(pipe);
-        return 1;
-    }
+    if (ipc_write_frame(pipe, MSG_ATTACH, sz, 4) != 0)
+        return 0;
 
     h_reader = CreateThread(NULL, 0, client_reader, &c, 0, NULL);
     h_input = CreateThread(NULL, 0, client_input, &c, 0, NULL);
@@ -91,7 +95,7 @@ int run_client(HANDLE pipe)
     while (!InterlockedCompareExchange(&c.quit, 0, 0)) {
         short cc, rr;
         Sleep(50);
-        winterm_size(&term, &cc, &rr);
+        winterm_size(term, &cc, &rr);
         if (cc != pc || rr != pr) {
             pc = cc; pr = rr;
             ipc_pack_size(sz, cc, rr);
@@ -102,9 +106,50 @@ int run_client(HANDLE pipe)
 
     /* Tear down: closing the pipe unblocks the reader; cancel the input read. */
     CloseHandle(pipe);
-    CancelIoEx(term.in, NULL);
+    CancelIoEx(term->in, NULL);
     if (h_reader) { WaitForSingleObject(h_reader, 1000); CloseHandle(h_reader); }
     if (h_input)  { WaitForSingleObject(h_input, 1000);  CloseHandle(h_input); }
+
+    if (InterlockedCompareExchange(&c.switching, 0, 0)) {
+        strncpy_s(switch_target, switch_target_cap, c.switch_target, _TRUNCATE);
+        return 1;
+    }
+    return 0;
+}
+
+int run_client(HANDLE pipe, const wchar_t *ns)
+{
+    winterm_t term;
+    char target[256];
+
+    if (winterm_enable(&term) != 0) {
+        fprintf(stderr, "tmuxw: failed to set up console\n");
+        CloseHandle(pipe);
+        return 1;
+    }
+
+    for (;;) {
+        int rc = run_one_attach(pipe, &term, target, sizeof(target));
+        if (rc != 1)
+            break;
+
+        {
+            wchar_t wtarget[256], resolved[512], pipename[512];
+            MultiByteToWideChar(CP_UTF8, 0, target, -1, wtarget, 256);
+            if (ns && ns[0])
+                _snwprintf_s(resolved, 512, _TRUNCATE, L"%s~%s", ns, wtarget);
+            else
+                wcscpy_s(resolved, 512, wtarget);
+            ipc_pipe_name(pipename, 512, resolved);
+
+            pipe = ipc_client_connect(pipename, 5000);
+            if (pipe == INVALID_HANDLE_VALUE) {
+                fprintf(stderr, "tmux: could not switch to session '%s'\n", target);
+                break;
+            }
+        }
+        /* Loop back into run_one_attach on the new pipe. */
+    }
 
     /* Restore the terminal for the shell we return to. */
     {

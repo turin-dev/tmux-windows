@@ -304,6 +304,14 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
             break;
         }
 
+        {
+            char switch_target[64];
+            if (session_take_switch(sess, switch_target, sizeof(switch_target))) {
+                ipc_write_frame(pipe, MSG_SWITCH, switch_target, (uint32_t)strlen(switch_target));
+                break;   /* the client reconnects elsewhere; we go back to listening */
+            }
+        }
+
         session_pump(sess);
         if (!session_alive(sess)) {
             session_ended = 1;
@@ -523,6 +531,11 @@ int run_standalone(const wchar_t *shell, const wchar_t *cwd)
 
         session_tick(sess);
         session_take_detach(sess);   /* no server to detach from; ignore */
+        {
+            char switch_target[64];
+            session_take_switch(sess, switch_target, sizeof(switch_target));
+            /* no server to switch to in standalone mode; ignore */
+        }
         session_pump(sess);
         session_render(sess, &frame);
         if (frame.len)

@@ -58,6 +58,11 @@ int        session_alive(const session_t *s);
 /* Consume a pending detach request (Ctrl-B d). Returns 1 once per request. */
 int        session_take_detach(session_t *s);
 
+/* Consume a pending switch-client request. Returns 1 once per request, with
+ * `out` filled in (UTF-8, NUL-terminated) with the target session name;
+ * returns 0 (out untouched) otherwise. */
+int        session_take_switch(session_t *s, char *out, size_t outcap);
+
 /* Run a single command line (e.g. "split-window -h"). */
 void       session_run(session_t *s, const char *cmdline);
 

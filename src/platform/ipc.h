@@ -11,6 +11,10 @@
  *   MSG_CMD     {utf-8 command}     MSG_CMD_OK   {} (command ran, no output)
  *                                   MSG_CMD_TEXT {utf-8 text} (command's output,
  *                                                e.g. list-windows/list-panes)
+ *                                   MSG_SWITCH {utf-8 target session name}
+ *                                                (switch-client: reconnect
+ *                                                to a different session in
+ *                                                place, see client.c)
  *
  * MSG_CMD travels over a *separate* pipe (see ipc_cmd_pipe_name) from
  * MSG_ATTACH/INPUT/RESIZE: it lets a one-shot CLI invocation (e.g.
@@ -36,7 +40,8 @@ enum {
     MSG_DETACH  = 11,
     MSG_EXIT    = 12,
     MSG_CMD_OK  = 13,  /* server -> client: MSG_CMD ran, no text output */
-    MSG_CMD_TEXT = 14  /* server -> client: MSG_CMD ran, payload is its output */
+    MSG_CMD_TEXT = 14, /* server -> client: MSG_CMD ran, payload is its output */
+    MSG_SWITCH  = 15   /* server -> client: switch-client, payload = target session */
 };
 
 /* Build the pipe name for a session (e.g. "default") into `out`. */
