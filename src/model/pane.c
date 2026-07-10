@@ -42,6 +42,9 @@ pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE w
     p->wake = wake;
     InitializeCriticalSection(&p->lock);
     strbuf_init(&p->pending);
+    wcsncpy_s(p->cmdline, 1024, cmdline, _TRUNCATE);
+    if (cwd) wcsncpy_s(p->cwd, MAX_PATH, cwd, _TRUNCATE);
+    else     p->cwd[0] = L'\0';
 
     p->screen = screen_new(cols, rows);
     if (p->screen == NULL)
@@ -78,6 +81,40 @@ void pane_close(pane_t *p)
     strbuf_free(&p->pending);
     DeleteCriticalSection(&p->lock);
     free(p);
+}
+
+int pane_respawn(pane_t *p)
+{
+    if (p->has_conpty) {
+        conpty_close(&p->pty);
+        p->has_conpty = 0;
+    }
+    if (p->reader) {
+        WaitForSingleObject(p->reader, 1000);
+        CloseHandle(p->reader);
+        p->reader = NULL;
+    }
+    EnterCriticalSection(&p->lock);
+    strbuf_clear(&p->pending);
+    LeaveCriticalSection(&p->lock);
+    if (p->screen) {
+        screen_clear_history(p->screen);
+        screen_mark_all_dirty(p->screen);
+    }
+
+    ZeroMemory(&p->pty, sizeof(p->pty));
+    if (conpty_spawn(&p->pty, p->cmdline, (short)p->cols, (short)p->rows,
+                     p->cwd[0] ? p->cwd : NULL) != 0)
+        return -1;
+    p->has_conpty = 1;
+
+    p->reader = CreateThread(NULL, 0, pane_reader, p, 0, NULL);
+    if (p->reader == NULL) {
+        conpty_close(&p->pty);
+        p->has_conpty = 0;
+        return -1;
+    }
+    return 0;
 }
 
 void pane_apply_geometry(pane_t *p)

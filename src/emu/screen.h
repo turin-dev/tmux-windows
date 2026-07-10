@@ -51,4 +51,8 @@ int  screen_sb_count(const screen_t *s);
 int  screen_total_lines(const screen_t *s);
 int  screen_line_cell(const screen_t *s, int absrow, int col, VTermScreenCell *cell);
 
+/* Discard all retained scrollback lines (clear-history). The live grid is
+ * untouched. */
+void screen_clear_history(screen_t *s);
+
 #endif /* TMUXW_EMU_SCREEN_H */

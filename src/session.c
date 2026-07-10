@@ -35,6 +35,14 @@ typedef struct keybind {
     char cmd[BIND_CMD_MAX];
 } keybind_t;
 
+#define MAX_BUFFERS 16
+
+typedef struct {
+    char    name[32];
+    char   *data;
+    size_t  len;
+} paste_buf_t;
+
 struct session {
     HANDLE          wake;
     const wchar_t  *shell;
@@ -84,6 +92,15 @@ struct session {
     /* Text produced by a "listing" command (list-windows, list-panes) for
      * session_run_capture to retrieve; empty after any other command. */
     char            cmd_result[2048];
+    /* Named paste buffers (list-buffers/show-buffer/set-buffer/delete-buffer/
+     * load-buffer/save-buffer, and copy-mode yanks). Oldest is evicted once
+     * full; paste-buffer/show-buffer default to the newest (top). */
+    paste_buf_t     buffers[MAX_BUFFERS];
+    int             nbuffers;
+    int             next_buf_id;    /* for auto-named "bufferN" */
+    /* confirm-before: a y/n gate in front of one command. */
+    int             confirm_active;
+    char            confirm_cmd[BIND_CMD_MAX];
 };
 
 static void session_run_command(session_t *s, const char *line);
@@ -519,15 +536,191 @@ static void cmd_join_pane(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+/* ----- named paste buffers --------------------------------------------------
+ *
+ * A small internal buffer stack, separate from (but kept in sync with) the
+ * Windows clipboard: copy-mode yanks and capture-pane push onto it, and
+ * list-buffers/show-buffer/set-buffer/delete-buffer/load-buffer/save-buffer
+ * all operate on it. paste-buffer prefers the top of this stack, falling
+ * back to the clipboard so a plain OS-level copy still pastes as before. */
+
+static void buffer_push(session_t *s, const char *name, const char *data, size_t len)
+{
+    paste_buf_t *b;
+    int i;
+    for (i = 0; i < s->nbuffers; i++) {
+        if (strcmp(s->buffers[i].name, name) == 0) {
+            free(s->buffers[i].data);
+            s->buffers[i].data = (char *)malloc(len + 1);
+            if (s->buffers[i].data) {
+                memcpy(s->buffers[i].data, data, len);
+                s->buffers[i].data[len] = '\0';
+            }
+            s->buffers[i].len = len;
+            return;
+        }
+    }
+    if (s->nbuffers >= MAX_BUFFERS) {
+        free(s->buffers[0].data);
+        memmove(&s->buffers[0], &s->buffers[1], (size_t)(MAX_BUFFERS - 1) * sizeof(paste_buf_t));
+        s->nbuffers--;
+    }
+    b = &s->buffers[s->nbuffers++];
+    strcpy_s(b->name, sizeof(b->name), name);
+    b->data = (char *)malloc(len + 1);
+    if (b->data) {
+        memcpy(b->data, data, len);
+        b->data[len] = '\0';
+    }
+    b->len = len;
+}
+
+static void buffer_push_auto(session_t *s, const char *data, size_t len)
+{
+    char name[32];
+    _snprintf_s(name, sizeof(name), _TRUNCATE, "buffer%d", s->next_buf_id++);
+    buffer_push(s, name, data, len);
+}
+
+static paste_buf_t *buffer_find(session_t *s, const char *name)
+{
+    int i;
+    if (name == NULL)
+        return s->nbuffers > 0 ? &s->buffers[s->nbuffers - 1] : NULL;
+    for (i = 0; i < s->nbuffers; i++)
+        if (strcmp(s->buffers[i].name, name) == 0)
+            return &s->buffers[i];
+    return NULL;
+}
+
+static void buffer_delete(session_t *s, const char *name)
+{
+    int i, idx = -1;
+    if (name == NULL) {
+        idx = s->nbuffers - 1;
+    } else {
+        for (i = 0; i < s->nbuffers; i++)
+            if (strcmp(s->buffers[i].name, name) == 0) { idx = i; break; }
+    }
+    if (idx < 0)
+        return;
+    free(s->buffers[idx].data);
+    memmove(&s->buffers[idx], &s->buffers[idx + 1],
+           (size_t)(s->nbuffers - idx - 1) * sizeof(paste_buf_t));
+    s->nbuffers--;
+}
+
+static void buffers_free_all(session_t *s)
+{
+    int i;
+    for (i = 0; i < s->nbuffers; i++)
+        free(s->buffers[i].data);
+    s->nbuffers = 0;
+}
+
+/* Extract argv[i]'s "-b <name>" if present anywhere; returns the first
+ * non-flag argv token seen (position-independent, unlike the CLI's -t
+ * convention) as *rest, or NULL. */
+static const char *find_named_arg(int argc, char **argv, const char **rest)
+{
+    const char *name = NULL;
+    int i;
+    if (rest) *rest = NULL;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-b") == 0 && i + 1 < argc) {
+            name = argv[++i];
+        } else if (rest && *rest == NULL) {
+            *rest = argv[i];
+        }
+    }
+    return name;
+}
+
+static void cmd_list_buffers(session_t *s, int argc, char **argv)
+{
+    int i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < s->nbuffers && o < (int)sizeof(s->cmd_result) - 96; i++) {
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%s: %zu bytes\n", s->buffers[i].name, s->buffers[i].len);
+        if (n < 0) break;
+        o += n;
+    }
+}
+
+static void cmd_show_buffer(session_t *s, int argc, char **argv)
+{
+    const char *name = find_named_arg(argc, argv, NULL);
+    paste_buf_t *b = buffer_find(s, name);
+    s->cmd_result[0] = '\0';
+    if (b && b->data) {
+        size_t n = b->len < sizeof(s->cmd_result) - 1 ? b->len : sizeof(s->cmd_result) - 1;
+        memcpy(s->cmd_result, b->data, n);
+        s->cmd_result[n] = '\0';
+    }
+}
+
+static void cmd_set_buffer(session_t *s, int argc, char **argv)
+{
+    const char *text = NULL;
+    const char *name = find_named_arg(argc, argv, &text);
+    if (text == NULL)
+        return;
+    if (name) buffer_push(s, name, text, strlen(text));
+    else      buffer_push_auto(s, text, strlen(text));
+}
+
+static void cmd_delete_buffer(session_t *s, int argc, char **argv)
+{
+    buffer_delete(s, find_named_arg(argc, argv, NULL));
+}
+
+static void cmd_load_buffer(session_t *s, int argc, char **argv)
+{
+    const char *path = NULL;
+    const char *name = find_named_arg(argc, argv, &path);
+    FILE *f = NULL;
+    char data[4096];
+    size_t n;
+    if (path == NULL || fopen_s(&f, path, "rb") != 0 || f == NULL)
+        return;
+    n = fread(data, 1, sizeof(data), f);
+    fclose(f);
+    if (name) buffer_push(s, name, data, n);
+    else      buffer_push_auto(s, data, n);
+}
+
+static void cmd_save_buffer(session_t *s, int argc, char **argv)
+{
+    const char *path = NULL;
+    const char *name = find_named_arg(argc, argv, &path);
+    paste_buf_t *b = buffer_find(s, name);
+    FILE *f = NULL;
+    if (path == NULL || b == NULL || b->data == NULL)
+        return;
+    if (fopen_s(&f, path, "wb") != 0 || f == NULL)
+        return;
+    fwrite(b->data, 1, b->len, f);
+    fclose(f);
+}
+
 static void cmd_paste_buffer(session_t *s, int argc, char **argv)
 {
     window_t *w = cur_window(s);
+    const char *name = find_named_arg(argc, argv, NULL);
+    paste_buf_t *b = buffer_find(s, name);
     size_t len = 0;
-    char *buf;
-    (void)argc; (void)argv;
+    char *buf = NULL, *owned = NULL;
     if (w == NULL)
         return;
-    buf = clipboard_get_utf8(&len);
+    if (b && b->data) {
+        buf = b->data;
+        len = b->len;
+    } else {
+        owned = clipboard_get_utf8(&len);
+        buf = owned;
+    }
     if (buf == NULL)
         return;
     {
@@ -544,7 +737,7 @@ static void cmd_paste_buffer(session_t *s, int argc, char **argv)
             window_write_active(w, o.data, o.len);
         strbuf_free(&o);
     }
-    free(buf);
+    free(owned);
 }
 
 static void cmd_next_window(session_t *s, int argc, char **argv)
@@ -870,6 +1063,131 @@ static void cmd_list_panes(session_t *s, int argc, char **argv)
     }
 }
 
+/* list-keys / lsk: one line per binding, "bind-key [-r] <key> <command>". */
+static void cmd_list_keys(session_t *s, int argc, char **argv)
+{
+    int i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < s->nbind && o < (int)sizeof(s->cmd_result) - 128; i++) {
+        char keyname[32];
+        int n;
+        cmd_key_name(s->bind[i].key, keyname, sizeof(keyname));
+        n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                        "bind-key%s %s %s\n", s->bind[i].repeat ? " -r" : "",
+                        keyname, s->bind[i].cmd);
+        if (n < 0) break;
+        o += n;
+    }
+}
+
+/* show-options / show-window-options / show: current values of every option
+ * `set`/`setw` can change. */
+static void cmd_show_options(session_t *s, int argc, char **argv)
+{
+    char pfx[16];
+    (void)argc; (void)argv;
+    cmd_key_name(s->prefix_key, pfx, sizeof(pfx));
+    s->cmd_result[0] = '\0';
+    _snprintf_s(s->cmd_result, sizeof(s->cmd_result), _TRUNCATE,
+               "prefix %s\n"
+               "status %s\n"
+               "mouse %s\n"
+               "base-index %d\n"
+               "pane-base-index %d\n"
+               "status-left \"%s\"\n"
+               "status-right \"%s\"\n",
+               pfx, s->status_on ? "on" : "off", s->mouse_on ? "on" : "off",
+               s->base_index, s->pane_base_index, s->status_left, s->status_right);
+}
+
+/* capture-pane / capturep: the active pane's full scrollback + visible grid,
+ * written to cmd_result (so `tmux capture-pane -t work` prints it directly)
+ * and also pushed onto the paste-buffer stack, matching tmux's default of
+ * leaving a new buffer behind. */
+static void cmd_capture_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    screen_t *sc;
+    int total, cols, line, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    if (w == NULL || w->active == NULL || w->active->screen == NULL)
+        return;
+    sc = w->active->screen;
+    total = screen_total_lines(sc);
+    cols = screen_cols(sc);
+    for (line = 0; line < total && o < (int)sizeof(s->cmd_result) - cols - 2; line++) {
+        int col, linestart = o, lineend;
+        for (col = 0; col < cols; col++) {
+            VTermScreenCell cell;
+            char ch = ' ';
+            if (screen_line_cell(sc, line, col, &cell) && cell.width != 0 && cell.chars[0])
+                ch = (cell.chars[0] < 128) ? (char)cell.chars[0] : ' ';
+            s->cmd_result[o++] = ch;
+        }
+        lineend = o;
+        while (lineend > linestart && s->cmd_result[lineend - 1] == ' ')
+            lineend--;
+        o = lineend;
+        s->cmd_result[o++] = '\n';
+    }
+    s->cmd_result[o] = '\0';
+    if (o > 0)
+        buffer_push_auto(s, s->cmd_result, (size_t)o);
+}
+
+/* clear-history / clearhist: drop the active pane's retained scrollback. */
+static void cmd_clear_history(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w && w->active && w->active->screen) {
+        screen_clear_history(w->active->screen);
+        mark(s, 1);
+    }
+}
+
+static void cmd_previous_layout(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w) { window_previous_layout(w); mark(s, 1); }
+}
+
+/* confirm-before -p "message" <command>: gate a (usually destructive) command
+ * behind a y/n prompt; see the confirm_active handling in session_input. */
+static void cmd_confirm_before(session_t *s, int argc, char **argv)
+{
+    const char *msg = "confirm? (y/n)";
+    const char *cmd = NULL;
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) msg = argv[++i];
+        else cmd = argv[i];
+    }
+    if (cmd == NULL)
+        return;
+    s->confirm_active = 1;
+    strncpy_s(s->confirm_cmd, sizeof(s->confirm_cmd), cmd, _TRUNCATE);
+    show_message(s, msg);
+    s->message_ticks = 1200;   /* pinned until answered, not the usual ~2s */
+}
+
+static void cmd_respawn_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w) { window_respawn_active(w); mark(s, 1); }
+}
+
+static void cmd_respawn_window(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    (void)argc; (void)argv;
+    if (w) { window_respawn_all(w); mark(s, 1); }
+}
+
 static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "new-window",      cmd_new_window },
     { "split-window",    cmd_split_window },
@@ -918,6 +1236,27 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "lsw",             cmd_list_windows },
     { "list-panes",      cmd_list_panes },
     { "lsp",             cmd_list_panes },
+    { "list-keys",       cmd_list_keys },
+    { "lsk",             cmd_list_keys },
+    { "show-options",    cmd_show_options },
+    { "show-window-options", cmd_show_options },
+    { "show",            cmd_show_options },
+    { "list-buffers",    cmd_list_buffers },
+    { "lsb",             cmd_list_buffers },
+    { "show-buffer",     cmd_show_buffer },
+    { "set-buffer",      cmd_set_buffer },
+    { "delete-buffer",   cmd_delete_buffer },
+    { "load-buffer",     cmd_load_buffer },
+    { "save-buffer",     cmd_save_buffer },
+    { "capture-pane",    cmd_capture_pane },
+    { "capturep",        cmd_capture_pane },
+    { "clear-history",   cmd_clear_history },
+    { "clearhist",       cmd_clear_history },
+    { "previous-layout", cmd_previous_layout },
+    { "confirm-before",  cmd_confirm_before },
+    { "confirm",         cmd_confirm_before },
+    { "respawn-pane",    cmd_respawn_pane },
+    { "respawn-window",  cmd_respawn_window },
 };
 
 static void run_argv(session_t *s, int argc, char **argv)
@@ -1200,6 +1539,7 @@ void session_free(session_t *s)
         return;
     for (i = 0; i < s->nwindows; i++)
         window_free(s->windows[i]);
+    buffers_free_all(s);
     free(s);
 }
 
@@ -1224,6 +1564,16 @@ void session_input(session_t *s, const char *bytes, size_t n)
                 s->prompt[s->prompt_len++] = (char)c;
             }
         }
+        mark(s, 1);
+        return;
+    }
+
+    /* confirm-before: y/Y runs the pending command, anything else cancels. */
+    if (s->confirm_active && n > 0) {
+        unsigned char c = (unsigned char)bytes[0];
+        s->confirm_active = 0;
+        if (c == 'y' || c == 'Y')
+            session_run_command(s, s->confirm_cmd);
         mark(s, 1);
         return;
     }
@@ -1282,8 +1632,10 @@ void session_input(session_t *s, const char *bytes, size_t n)
     if (s->copy.active) {
         strbuf_t text;
         strbuf_init(&text);
-        if (copymode_input(&s->copy, bytes, n, &text) && text.len)
+        if (copymode_input(&s->copy, bytes, n, &text) && text.len) {
             clipboard_set_utf8(text.data, text.len);
+            buffer_push_auto(s, text.data, text.len);
+        }
         strbuf_free(&text);
         mark(s, 1);           /* repaint the viewport (or the restored live view) */
         return;

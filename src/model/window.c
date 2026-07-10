@@ -219,6 +219,11 @@ void window_next_layout(window_t *w)
     window_set_layout(w, (w->layout + 1) % LAYOUT_COUNT);
 }
 
+void window_previous_layout(window_t *w)
+{
+    window_set_layout(w, (w->layout + LAYOUT_COUNT - 1) % LAYOUT_COUNT);
+}
+
 void window_toggle_zoom(window_t *w)
 {
     if (w->root == NULL || w->active == NULL)
@@ -384,6 +389,24 @@ void window_kill_others(window_t *w)
     w->drag = NULL;
     if (w->root)
         layout_apply(w->root, 0, 0, w->cols, w->rows);
+}
+
+int window_respawn_active(window_t *w)
+{
+    if (w->active == NULL)
+        return -1;
+    return pane_respawn(w->active);
+}
+
+void window_respawn_all(window_t *w)
+{
+    pane_t *ps[TMUXW_MAX_PANES];
+    int n, i;
+    if (w->root == NULL)
+        return;
+    n = layout_collect(w->root, ps, TMUXW_MAX_PANES);
+    for (i = 0; i < n; i++)
+        pane_respawn(ps[i]);
 }
 
 void window_write_active(window_t *w, const char *bytes, size_t n)

@@ -26,6 +26,8 @@ typedef struct pane {
     HANDLE           reader;            /* output reader thread */
     HANDLE           wake;              /* shared main-loop event (not owned) */
     int              has_conpty;
+    wchar_t          cmdline[1024];     /* remembered for pane_respawn */
+    wchar_t          cwd[MAX_PATH];     /* ditto; empty means "inherited" */
 } pane_t;
 
 /* Spawn `cmdline` in a cols x rows pseudo console, starting in `cwd`
@@ -49,5 +51,11 @@ void    pane_write_input(pane_t *p, const char *bytes, size_t n);
 
 /* True once the child process has exited. */
 int     pane_child_exited(pane_t *p);
+
+/* Restart the pane's child process in place -- same geometry, screen, and id
+ * -- by closing the old pseudo console/reader and spawning the pane's
+ * original cmdline/cwd again. Used by respawn-pane/respawn-window. Returns 0
+ * on success. */
+int     pane_respawn(pane_t *p);
 
 #endif /* TMUXW_MODEL_PANE_H */

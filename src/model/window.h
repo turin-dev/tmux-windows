@@ -65,8 +65,9 @@ void      window_resize_active(window_t *w, int dir, int amount);
 
 /* Re-tile the panes into a named preset (LAYOUT_*); unzooms first. */
 void      window_set_layout(window_t *w, int preset);
-/* Cycle to the next preset. */
+/* Cycle to the next / previous preset. */
 void      window_next_layout(window_t *w);
+void      window_previous_layout(window_t *w);
 
 /* Toggle zoom of the active pane (fills the window, hiding the others). */
 void      window_toggle_zoom(window_t *w);
@@ -97,6 +98,12 @@ pane_t   *window_active(window_t *w);
 
 /* Kill the active pane. Returns 1 if the window is now empty. */
 int       window_kill_active(window_t *w);
+
+/* Restart the active pane's child process in place (respawn-pane). Returns 0
+ * on success, -1 if there is no active pane or the respawn itself failed. */
+int       window_respawn_active(window_t *w);
+/* Restart every pane's child process in the window (respawn-window). */
+void      window_respawn_all(window_t *w);
 
 /* Close every pane except the active one (kill-pane -a). */
 void      window_kill_others(window_t *w);

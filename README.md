@@ -197,8 +197,9 @@ unbind '"'
 
 Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`,
 `resize-pane [-U|-D|-L|-R [n]] [-Z]`, `select-layout <name>`, `next-layout`,
+`previous-layout`,
 `rotate-window [-U]`, `swap-pane [-U|-D]`, `break-pane`, `join-pane -s N [-h|-v]`,
-`paste-buffer`,
+`paste-buffer [-b name]`,
 `last-pane`, `last-window`, `kill-pane [-a]`, `next-window`, `previous-window`,
 `select-window -t N`, `swap-window [-s a] -t b`, `move-window -t N`,
 `kill-window`,
@@ -208,7 +209,18 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `run-shell <cmd>`, `if-shell <cond> <then> [else]`, `clock-mode`,
 `command-prompt`, `set <option> <value>`,
 `bind <key> <command>`, `unbind <key>`, `source-file <path>`,
-`list-windows` (alias `lsw`), `list-panes` (alias `lsp`).
+`list-windows` (alias `lsw`), `list-panes` (alias `lsp`),
+`list-keys` (alias `lsk`), `show-options` (aliases `show-window-options`, `show`),
+`list-buffers` (alias `lsb`), `show-buffer [-b name]`, `set-buffer [-b name] <text>`,
+`delete-buffer [-b name]`, `load-buffer [-b name] <path>`, `save-buffer [-b name] <path>`,
+`capture-pane` (alias `capturep`), `clear-history` (alias `clearhist`),
+`confirm-before -p <message> <command>` (alias `confirm`),
+`respawn-pane`, `respawn-window`.
+
+Paste buffers are a small internal stack (newest on top), separate from but
+kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`
+push a new buffer; `paste-buffer` prefers the top of that stack and falls
+back to the clipboard so a plain OS-level copy still pastes as before.
 
 Multiple commands can be chained on one line (in a binding, config, or prompt)
 with a standalone `;`, e.g. `bind S "split-window -v ; select-pane -D"`.
@@ -241,6 +253,7 @@ build\tmuxw.exe --selftest-split          REM two panes + layout + compositor
 build\tmuxw.exe --selftest-ipc            REM full server/client round trip
 build\tmuxw.exe --selftest-cmdipc         REM one-off commands against a detached session
 build\tmuxw.exe --selftest-attachd        REM attach -d kicks an already-attached client
+build\tmuxw.exe --selftest-confirm        REM confirm-before y/n gate + capture-pane/clear-history/previous-layout
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session
 build\tmuxw.exe --selftest-cmd            REM command system + bindings + config

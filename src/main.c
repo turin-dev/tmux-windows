@@ -26,6 +26,7 @@
  *   tmux --selftest-ipc                   headless: full server/client round trip
  *   tmux --selftest-cmdipc                headless: one-off commands vs. a detached session
  *   tmux --selftest-attachd               headless: attach -d kicks an attached client
+ *   tmux --selftest-confirm               headless: confirm-before, capture-pane, etc.
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
  */
@@ -1634,6 +1635,60 @@ static int run_selftest_options(void)
     return ok ? 0 : 1;
 }
 
+/* confirm-before shows a message and gates a command behind y/n: 'n' (or
+ * anything but y/Y) cancels, y/Y runs it. Also exercises capture-pane,
+ * clear-history, and previous-layout, which don't have a dedicated selftest
+ * elsewhere. */
+static int run_selftest_confirm(void)
+{
+    HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
+    session_t *s = session_create(L"cmd.exe", 80, 25, wake);
+    strbuf_t frame;
+    int ok = 1;
+
+    if (s == NULL) {
+        printf("FAIL: session_create\n");
+        if (wake) CloseHandle(wake);
+        return 1;
+    }
+    strbuf_init(&frame);
+    Sleep(300);
+    session_pump(s);
+
+    session_run(s, "confirm-before -p \"rename? (y/n)\" \"rename-window NOPE\"");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "rename?") == NULL) { printf("FAIL: confirm-before message not shown\n"); ok = 0; }
+
+    session_input(s, "n", 1);        /* cancel */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "0:NOPE") != NULL) { printf("FAIL: 'n' should have cancelled\n"); ok = 0; }
+
+    session_run(s, "confirm-before -p \"rename? (y/n)\" \"rename-window CONFIRMED\"");
+    session_input(s, "y", 1);        /* confirm */
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "0:CONFIRMED") == NULL) { printf("FAIL: 'y' should have run the command\n"); ok = 0; }
+
+    /* capture-pane / clear-history / previous-layout smoke: none of these
+     * should crash. */
+    session_run(s, "capture-pane");
+    session_run(s, "clear-history");
+    session_run(s, "split-window -h");
+    session_run(s, "previous-layout");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "\xe2\x94\x82") == NULL) { printf("FAIL: previous-layout broke the split\n"); ok = 0; }
+
+    printf("%s\n", ok ? "CONFIRM SELFTEST PASSED" : "CONFIRM SELFTEST FAILED");
+
+    strbuf_free(&frame);
+    session_free(s);
+    if (wake) CloseHandle(wake);
+    return ok ? 0 : 1;
+}
+
 /* ----- dispatch ------------------------------------------------------------- */
 
 int wmain(int argc, wchar_t **argv)
@@ -1664,6 +1719,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_break();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-options") == 0)
         return run_selftest_options();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-confirm") == 0)
+        return run_selftest_confirm();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-sendkeys") == 0)
         return run_selftest_sendkeys();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-display") == 0)

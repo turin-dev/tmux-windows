@@ -206,6 +206,12 @@ void screen_free(screen_t *s)
     free(s);
 }
 
+void screen_clear_history(screen_t *s)
+{
+    if (s != NULL)
+        sb_clear(s);
+}
+
 void screen_write(screen_t *s, const char *bytes, size_t len)
 {
     vterm_input_write(s->vt, bytes, len);
