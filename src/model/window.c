@@ -417,11 +417,13 @@ void window_write_active(window_t *w, const char *bytes, size_t n)
         pane_write_input(w->active, bytes, n);
 }
 
-size_t window_pump(window_t *w)
+size_t window_pump_ex(window_t *w, int *out_died)
 {
     pane_t *leaves[TMUXW_MAX_PANES];
     int count, i, removed = 0;
     size_t parsed = 0;
+
+    if (out_died) *out_died = 0;
 
     count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
     for (i = 0; i < count; i++)
@@ -444,6 +446,7 @@ size_t window_pump(window_t *w)
             w->last_active = NULL;
         pane_close(p);
         removed = 1;
+        if (out_died) *out_died = 1;
         if (w->root == NULL) {
             w->active = NULL;
             return parsed;
@@ -457,6 +460,11 @@ size_t window_pump(window_t *w)
         layout_apply(w->root, 0, 0, w->cols, w->rows);
     }
     return parsed;
+}
+
+size_t window_pump(window_t *w)
+{
+    return window_pump_ex(w, NULL);
 }
 
 int window_empty(const window_t *w)

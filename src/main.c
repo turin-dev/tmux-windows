@@ -1743,6 +1743,24 @@ static int run_selftest_confirm(void)
     strbuf_putc(&frame, '\0');
     if (strstr(frame.data, "\xe2\x94\x82") == NULL) { printf("FAIL: previous-layout broke the split\n"); ok = 0; }
 
+    /* choose-buffer: opens a picker over the paste-buffer stack; Enter pastes
+     * the highlighted one into the active pane. */
+    session_run(s, "set-buffer -b choosetest CHOOSEBUF_PAYLOAD");
+    session_run(s, "choose-buffer");
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "choosetest") == NULL) { printf("FAIL: choose-buffer picker not shown\n"); ok = 0; }
+
+    session_input(s, "\r", 1);       /* select it: pastes into the active pane */
+    Sleep(400);
+    session_pump(s);
+    session_render(s, &frame);
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "CHOOSEBUF_PAYLOAD") == NULL) {
+        printf("FAIL: choose-buffer Enter did not paste the selected buffer\n");
+        ok = 0;
+    }
+
     printf("%s\n", ok ? "CONFIRM SELFTEST PASSED" : "CONFIRM SELFTEST FAILED");
 
     strbuf_free(&frame);
@@ -1894,6 +1912,55 @@ int wmain(int argc, wchar_t **argv)
 
         if (wcscmp(sub, L"kill-server") == 0)
             return kill_server_cmd();
+
+        /* wait-for [-t session] [-S|-L|-U] <channel>: -S/-L/-U signal (see
+         * cmd_wait_for for why tmux's lock semantics aren't distinguished
+         * here) and are otherwise a normal fire-and-forget forward. A bare
+         * wait blocks until signalled -- but the *server* never blocks (see
+         * the wait-for section in session.c), so the CLI polls here instead,
+         * matching tmux's actual blocking behavior from the caller's point
+         * of view without freezing the session for anyone attached to it. */
+        if (wcscmp(sub, L"wait-for") == 0) {
+            wchar_t name[256] = L"", cmdpipename[512], nsname[512];
+            char channel[64] = "", cmdline[128], reply[64];
+            int i, is_signal = 0, start = subidx + 1;
+
+            if (argc > subidx + 2 && wcscmp(argv[subidx + 1], L"-t") == 0) {
+                wcscpy_s(name, 256, argv[subidx + 2]);
+                start = subidx + 3;
+            }
+            for (i = start; i < argc; i++) {
+                if (wcscmp(argv[i], L"-S") == 0 || wcscmp(argv[i], L"-L") == 0 ||
+                    wcscmp(argv[i], L"-U") == 0)
+                    is_signal = 1;
+                else
+                    WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, channel, sizeof(channel), NULL, NULL);
+            }
+
+            ns_session_name(name, nsname, 512);
+            ipc_cmd_pipe_name(cmdpipename, 512, nsname);
+
+            if (is_signal) {
+                _snprintf_s(cmdline, sizeof(cmdline), _TRUNCATE, "wait-for -S %s", channel);
+                if (send_one_cmd(cmdpipename, cmdline) != 0) {
+                    fprintf(stderr, "tmux: no server running for session '%ls'\n",
+                            name[0] ? name : L"default");
+                    return 1;
+                }
+                return 0;
+            }
+            _snprintf_s(cmdline, sizeof(cmdline), _TRUNCATE, "wait-for %s", channel);
+            for (;;) {
+                if (send_cmd_capture(cmdpipename, cmdline, reply, sizeof(reply)) != 0) {
+                    fprintf(stderr, "tmux: no server running for session '%ls'\n",
+                            name[0] ? name : L"default");
+                    return 1;
+                }
+                if (strncmp(reply, "OK", 2) == 0)
+                    return 0;
+                Sleep(200);
+            }
+        }
 
         /* Anything else is forwarded verbatim to a session's server as an
          * in-session command (send-keys, rename-session, new-window, ...),

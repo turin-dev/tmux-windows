@@ -227,10 +227,22 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `respawn-pane`, `respawn-window`,
 `pipe-pane [-o] [<shell-command>]`, `list-commands` (alias `lscm`),
 `list-clients` (alias `lsc`),
-`set-environment [-u] <name> [value]`, `show-environment`, `unset-environment <name>`.
+`set-environment [-u] <name> [value]`, `show-environment`, `unset-environment <name>`,
+`choose-buffer`, `set-hook [-u] <event> <command>`, `show-hooks`,
+`wait-for [-S|-L|-U] <channel>`.
 
 `set-environment` overrides apply to panes created from then on (`new-window`,
 `split-window`), not retroactively to already-running ones, matching tmux.
+
+Hooks fired automatically by this build: `window-linked` (new-window),
+`pane-died`, `client-attached`, `client-detached`. `set-hook`/`show-hooks`
+accept and store any event name (matching tmux), but only those four ever
+fire on their own.
+
+`wait-for` (no flag) blocks the *caller* until `wait-for -S <channel>` is run
+elsewhere against the same session — the server itself never blocks (that
+would freeze the session for anyone attached to it), so the CLI polls
+underneath.
 
 Paste buffers are a small internal stack (newest on top), separate from but
 kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`

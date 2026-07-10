@@ -116,7 +116,10 @@ void      window_kill_others(window_t *w);
 void      window_write_active(window_t *w, const char *bytes, size_t n);
 
 /* Parse pane output and reap exited children. Returns bytes parsed (>0 means
- * the window changed). Removes dead panes; the window may become empty. */
+ * the window changed). Removes dead panes; the window may become empty. If
+ * `out_died` is non-NULL, it's set to 1 when at least one pane was reaped
+ * (for the pane-died hook), 0 otherwise. */
+size_t    window_pump_ex(window_t *w, int *out_died);
 size_t    window_pump(window_t *w);
 int       window_empty(const window_t *w);
 

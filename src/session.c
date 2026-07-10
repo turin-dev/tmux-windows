@@ -49,6 +49,19 @@ typedef struct {
     char value[512];
 } env_var_t;
 
+#define MAX_HOOKS  16
+#define MAX_WAITCH 16
+
+typedef struct {
+    char event[32];
+    char cmd[BIND_CMD_MAX];
+} hook_t;
+
+typedef struct {
+    char name[64];
+    int  signaled;
+} wait_chan_t;
+
 struct session {
     HANDLE          wake;
     const wchar_t  *shell;
@@ -79,6 +92,8 @@ struct session {
     int             message_ticks;    /* display-message ticks remaining */
     int             choose_active;    /* choose-window picker open */
     int             choose_sel;       /* highlighted window in the picker */
+    int             choose_buf_active; /* choose-buffer picker open */
+    int             choose_buf_sel;    /* highlighted buffer in the picker */
     int             mouse_on;
     int             mouse_dirty;   /* mouse mode changed; (re)emit DECSET/DECRST */
     /* normal-mode SGR mouse scanner */
@@ -113,12 +128,24 @@ struct session {
      * pane's environment (see build_env_block). */
     env_var_t       env[MAX_ENV];
     int             nenv;
+    /* set-hook: a command to run when a named event fires (see fire_hook).
+     * Events actually fired by this build: window-linked, pane-died,
+     * client-attached, client-detached -- but set-hook/show-hooks accept and
+     * store any event name, same as tmux. */
+    hook_t          hooks[MAX_HOOKS];
+    int             nhooks;
+    /* wait-for: named channels signalled by `wait-for -S` and consumed by a
+     * plain `wait-for` (the CLI polls session_run_capture for this rather
+     * than the server blocking its single command-execution thread). */
+    wait_chan_t     waitch[MAX_WAITCH];
+    int             nwaitch;
 };
 
 static void session_run_command(session_t *s, const char *line);
 static void session_load_config_path(session_t *s, const char *path);
 static void expand_status(session_t *s, const char *fmt, char *out, size_t cap);
 static wchar_t *build_env_block(session_t *s);
+static void fire_hook(session_t *s, const char *event);
 
 /* Run `cmdline` through cmd.exe, capturing up to cap-1 bytes of stdout into
  * `out` and the process exit code into *code. Returns 0 on success. Blocks. */
@@ -285,6 +312,7 @@ static void new_window(session_t *s)
     s->cur = s->nwindows;
     s->nwindows++;
     mark(s, 1);
+    fire_hook(s, "window-linked");
 }
 
 static void remove_window(session_t *s, int idx)
@@ -752,6 +780,81 @@ static wchar_t *build_env_block(session_t *s)
     return result;
 }
 
+/* ----- set-hook --------------------------------------------------------- */
+
+static void hook_set(session_t *s, const char *event, const char *cmd)
+{
+    int i;
+    for (i = 0; i < s->nhooks; i++) {
+        if (strcmp(s->hooks[i].event, event) == 0) {
+            strncpy_s(s->hooks[i].cmd, sizeof(s->hooks[i].cmd), cmd, _TRUNCATE);
+            return;
+        }
+    }
+    if (s->nhooks >= MAX_HOOKS)
+        return;
+    strncpy_s(s->hooks[s->nhooks].event, sizeof(s->hooks[s->nhooks].event), event, _TRUNCATE);
+    strncpy_s(s->hooks[s->nhooks].cmd, sizeof(s->hooks[s->nhooks].cmd), cmd, _TRUNCATE);
+    s->nhooks++;
+}
+
+static void hook_unset(session_t *s, const char *event)
+{
+    int i;
+    for (i = 0; i < s->nhooks; i++) {
+        if (strcmp(s->hooks[i].event, event) == 0) {
+            memmove(&s->hooks[i], &s->hooks[i + 1], (size_t)(s->nhooks - i - 1) * sizeof(hook_t));
+            s->nhooks--;
+            return;
+        }
+    }
+}
+
+/* Run the command registered for `event`, if any. Events actually raised by
+ * this build: window-linked (new-window), pane-died, client-attached,
+ * client-detached. set-hook/show-hooks accept and store any event name
+ * (matching tmux), but only those four ever get fired automatically. */
+static void fire_hook(session_t *s, const char *event)
+{
+    int i;
+    for (i = 0; i < s->nhooks; i++) {
+        if (strcmp(s->hooks[i].event, event) == 0) {
+            session_run_command(s, s->hooks[i].cmd);
+            return;
+        }
+    }
+}
+
+/* ----- wait-for ---------------------------------------------------------
+ *
+ * wait-for's blocking wait is deliberately NOT implemented by blocking the
+ * server: this session's single command-execution path also drives
+ * rendering and input for any attached client, so blocking it would freeze
+ * the whole session for however long the wait takes. Instead, a plain
+ * `wait-for <channel>` just reports whether the channel has been signalled
+ * yet (see cmd_wait_for's "OK"/"PENDING" result); the CLI (main.c) is the
+ * one that polls. */
+
+static wait_chan_t *waitch_find(session_t *s, const char *name)
+{
+    int i;
+    for (i = 0; i < s->nwaitch; i++)
+        if (strcmp(s->waitch[i].name, name) == 0)
+            return &s->waitch[i];
+    return NULL;
+}
+
+static void waitch_signal(session_t *s, const char *name)
+{
+    wait_chan_t *c = waitch_find(s, name);
+    if (c) { c->signaled = 1; return; }
+    if (s->nwaitch >= MAX_WAITCH)
+        return;
+    strncpy_s(s->waitch[s->nwaitch].name, sizeof(s->waitch[s->nwaitch].name), name, _TRUNCATE);
+    s->waitch[s->nwaitch].signaled = 1;
+    s->nwaitch++;
+}
+
 /* Extract argv[i]'s "-b <name>" if present anywhere; returns the first
  * non-flag argv token seen (position-independent, unlike the CLI's -t
  * convention) as *rest, or NULL. */
@@ -1096,6 +1199,18 @@ static void cmd_choose_window(session_t *s, int argc, char **argv)
     mark(s, 1);
 }
 
+/* choose-buffer: navigate the paste-buffer stack (like choose-window);
+ * Enter pastes the highlighted buffer into the active pane. */
+static void cmd_choose_buffer(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (s->nbuffers == 0)
+        return;
+    s->choose_buf_active = 1;
+    s->choose_buf_sel = s->nbuffers - 1;   /* newest first */
+    mark(s, 1);
+}
+
 static void show_message(session_t *s, const char *text)
 {
     strncpy_s(s->message, sizeof(s->message), text, _TRUNCATE);
@@ -1378,6 +1493,70 @@ static void cmd_unset_environment(session_t *s, int argc, char **argv)
         env_unset(s, argv[1]);
 }
 
+/* set-hook [-u] <event> <command>: run <command> whenever <event> fires (see
+ * fire_hook for which events this build actually raises). */
+static void cmd_set_hook(session_t *s, int argc, char **argv)
+{
+    int i, unset = 0;
+    const char *event = NULL, *cmd = NULL;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-u") == 0) unset = 1;
+        else if (event == NULL) event = argv[i];
+        else cmd = argv[i];
+    }
+    if (event == NULL)
+        return;
+    if (unset) hook_unset(s, event);
+    else if (cmd) hook_set(s, event, cmd);
+}
+
+static void cmd_show_hooks(session_t *s, int argc, char **argv)
+{
+    int i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < s->nhooks && o < (int)sizeof(s->cmd_result) - 200; i++) {
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%s -> %s\n", s->hooks[i].event, s->hooks[i].cmd);
+        if (n < 0) break;
+        o += n;
+    }
+}
+
+/* wait-for [-S|-L|-U] <channel>: -S (and, simplified, -L/-U -- see the
+ * wait-for section above for why tmux's lock semantics aren't distinguished
+ * here) signals the channel; a bare <channel> reports "OK" if it has been
+ * signalled (consuming that signal) or "PENDING" otherwise, for the CLI to
+ * poll on. */
+static void cmd_wait_for(session_t *s, int argc, char **argv)
+{
+    int i, is_signal = 0;
+    const char *name = NULL;
+    wait_chan_t *c;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "-L") == 0 || strcmp(argv[i], "-U") == 0)
+            is_signal = 1;
+        else
+            name = argv[i];
+    }
+    s->cmd_result[0] = '\0';
+    if (name == NULL)
+        return;
+    if (is_signal) {
+        waitch_signal(s, name);
+        strcpy_s(s->cmd_result, sizeof(s->cmd_result), "OK");
+        return;
+    }
+    c = waitch_find(s, name);
+    if (c && c->signaled) {
+        c->signaled = 0;
+        strcpy_s(s->cmd_result, sizeof(s->cmd_result), "OK");
+    } else {
+        strcpy_s(s->cmd_result, sizeof(s->cmd_result), "PENDING");
+    }
+}
+
 /* Forward-declared so they can appear in CMD_TABLE; cmd_list_commands is
  * defined after it since it needs to enumerate the table, and
  * cmd_list_clients simply lives alongside it. */
@@ -1424,6 +1603,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "display-panes",   cmd_display_panes },
     { "choose-window",   cmd_choose_window },
     { "choose-tree",     cmd_choose_window },
+    { "choose-buffer",   cmd_choose_buffer },
     { "display-message", cmd_display_message },
     { "run-shell",       cmd_run_shell },
     { "if-shell",        cmd_if_shell },
@@ -1461,6 +1641,9 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "set-environment", cmd_set_environment },
     { "show-environment", cmd_show_environment },
     { "unset-environment", cmd_unset_environment },
+    { "set-hook",        cmd_set_hook },
+    { "show-hooks",      cmd_show_hooks },
+    { "wait-for",        cmd_wait_for },
 };
 
 /* list-clients / lsc: whether (and at what size) a client is attached. Since
@@ -1850,6 +2033,37 @@ void session_input(session_t *s, const char *bytes, size_t n)
         return;
     }
 
+    /* choose-buffer picker: same navigation as choose-window; Enter pastes
+     * the highlighted buffer, q/Esc cancels. */
+    if (s->choose_buf_active && n > 0) {
+        unsigned char c = (unsigned char)bytes[0];
+        int nb = s->nbuffers;
+        if (c == 0x1b) {
+            if (n >= 3 && bytes[1] == '[') {
+                if (bytes[2] == 'A' && s->choose_buf_sel > 0) s->choose_buf_sel--;
+                else if (bytes[2] == 'B' && s->choose_buf_sel < nb - 1) s->choose_buf_sel++;
+            } else {
+                s->choose_buf_active = 0;
+            }
+        } else if ((c == 'j' || c == 0x0e) && s->choose_buf_sel < nb - 1) {
+            s->choose_buf_sel++;
+        } else if ((c == 'k' || c == 0x10) && s->choose_buf_sel > 0) {
+            s->choose_buf_sel--;
+        } else if (c == '\r' || c == '\n') {
+            char cmdline[96];
+            s->choose_buf_active = 0;
+            if (s->choose_buf_sel >= 0 && s->choose_buf_sel < s->nbuffers) {
+                _snprintf_s(cmdline, sizeof(cmdline), _TRUNCATE,
+                           "paste-buffer -b %s", s->buffers[s->choose_buf_sel].name);
+                session_run_command(s, cmdline);
+            }
+        } else if (c == 'q') {
+            s->choose_buf_active = 0;
+        }
+        mark(s, 1);
+        return;
+    }
+
     /* While the pane-number overlay is up, the next key dismisses it; a digit
      * also selects that pane. */
     if (s->show_panes > 0 && n > 0) {
@@ -1952,7 +2166,13 @@ void session_pump(session_t *s)
 {
     int i = 0;
     while (i < s->nwindows) {
-        size_t parsed = window_pump(s->windows[i]);
+        int died = 0;
+        size_t parsed = window_pump_ex(s->windows[i], &died);
+        if (died) {
+            fire_hook(s, "pane-died");   /* may itself run arbitrary commands */
+            if (i >= s->nwindows)
+                break;                   /* the hook's command changed the window count */
+        }
         if (window_empty(s->windows[i])) {
             remove_window(s, i);
             if (s->nwindows == 0)
@@ -2063,6 +2283,19 @@ static void render_choose(session_t *s, strbuf_t *frame)
     }
 }
 
+/* Draw the choose-buffer picker: one buffer per row, the selection highlighted. */
+static void render_choose_buffer(session_t *s, strbuf_t *frame)
+{
+    int i;
+    for (i = 0; i < s->nbuffers && i < s->rows - 1; i++) {
+        char line[96];
+        _snprintf_s(line, sizeof(line), _TRUNCATE, " %s: %-12zu bytes ",
+                    s->buffers[i].name, s->buffers[i].len);
+        strbuf_printf(frame, "\x1b[%d;1H%s%s\x1b[0m",
+                      i + 1, (i == s->choose_buf_sel) ? "\x1b[7m" : "\x1b[1m", line);
+    }
+}
+
 /* Draw a transient message across the status row (reverse video, full width). */
 static void render_message(session_t *s, strbuf_t *frame)
 {
@@ -2111,6 +2344,8 @@ void session_render(session_t *s, strbuf_t *frame)
         window_display_panes(frame, w, s->pane_base_index);
     if (s->choose_active)
         render_choose(s, frame);       /* window picker overlay */
+    if (s->choose_buf_active)
+        render_choose_buffer(s, frame); /* buffer picker overlay */
     if (s->message_ticks > 0)
         render_message(s, frame);      /* transient message over the status row */
     if (s->prompt_active)
@@ -2128,7 +2363,12 @@ void session_force_redraw(session_t *s)
 
 void session_set_attached(session_t *s, int on)
 {
+    int was = s->attached;
     s->attached = on ? 1 : 0;
+    if (s->attached && !was)
+        fire_hook(s, "client-attached");
+    else if (!s->attached && was)
+        fire_hook(s, "client-detached");
 }
 
 int session_alive(const session_t *s)
