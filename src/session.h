@@ -66,4 +66,8 @@ void       session_run_capture(session_t *s, const char *cmdline, strbuf_t *out)
 /* Load and run the user's config (~/.tmuxw.conf) if present. */
 void       session_load_config(session_t *s);
 
+/* Like session_load_config, but loads `override_path` instead when non-NULL/
+ * non-empty (tmux -f <file>). */
+void       session_load_config_from(session_t *s, const char *override_path);
+
 #endif /* TMUXW_SESSION_H */

@@ -84,6 +84,7 @@ tmux new -s work               REM start/attach a named session
 tmux new -d -s work            REM start a session without attaching (background it)
 tmux new -s work -c C:\proj     REM start a session with a given starting directory
 tmux new -s work -x 200 -y 50  REM start a session at a given initial size
+tmux -f other.conf new -s work REM start a session, loading an alternate config file
 tmux attach -t work            REM attach to an existing session (alias: a)
 tmux attach -d -t work         REM attach, kicking any client already attached to it
 tmux has-session -t work       REM exit 0 if that session's server is running (alias: has)

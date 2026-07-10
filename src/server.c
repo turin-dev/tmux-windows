@@ -333,7 +333,7 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
 }
 
 int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd,
-               int cols, int rows)
+               int cols, int rows, const char *cfgpath)
 {
     HANDLE wake;
     session_t *sess;
@@ -350,7 +350,7 @@ int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd
         if (wake) CloseHandle(wake);
         return 1;
     }
-    session_load_config(sess);
+    session_load_config_from(sess, cfgpath);
     srvlog("run_server: session created");
     strbuf_init(&frame);
 

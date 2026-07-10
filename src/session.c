@@ -1940,8 +1940,18 @@ void session_run_capture(session_t *s, const char *cmdline, strbuf_t *out)
 
 void session_load_config(session_t *s)
 {
+    session_load_config_from(s, NULL);
+}
+
+void session_load_config_from(session_t *s, const char *override_path)
+{
     char path[MAX_PATH];
-    DWORD n = GetEnvironmentVariableA("USERPROFILE", path, sizeof(path));
+    DWORD n;
+    if (override_path != NULL && override_path[0] != '\0') {
+        session_load_config_path(s, override_path);
+        return;
+    }
+    n = GetEnvironmentVariableA("USERPROFILE", path, sizeof(path));
     if (n > 0 && n < sizeof(path)) {
         strcat_s(path, sizeof(path), "\\.tmuxw.conf");
         session_load_config_path(s, path);
