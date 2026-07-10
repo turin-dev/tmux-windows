@@ -2063,6 +2063,13 @@ int wmain(int argc, wchar_t **argv)
             }
         }
 
+        /* Only global flags were given (e.g. `tmux -L work`): attach to (or
+         * start) the default session, same as bare `tmux`, but within
+         * whatever namespace/config was just set. (Without this check,
+         * argv[subidx] below would read past the end of argv.) */
+        if (subidx >= argc)
+            return attach_session(L"default", default_shell(), 1, NULL, 0, 0, 0, 0, cfgfile);
+
         /* A tmux-style client subcommand: new / new-session / attach / a. */
         if (argv[subidx][0] != L'-') {
             const wchar_t *sub = argv[subidx];
