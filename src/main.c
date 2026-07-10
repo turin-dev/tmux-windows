@@ -752,7 +752,12 @@ static int run_selftest_ipc(void)
     }
     printf("%s\n", ok ? "IPC SELFTEST PASSED" : "IPC SELFTEST FAILED");
 
-    /* Unblock the reader (parked in ReadFile), then shut the server down. */
+    /* Ask the server to exit over the pipe -- this works even when `server`
+     * is NULL (e.g. it escaped a restrictive job via Task Scheduler, so we
+     * never got a process handle for it; see spawn_server_ex). Then unblock
+     * the reader (parked in ReadFile) and clean up. */
+    ipc_write_frame(t.pipe, MSG_KILL, NULL, 0);
+    Sleep(150);
     CancelIoEx(t.pipe, NULL);
     CloseHandle(t.pipe);
     if (reader) { WaitForSingleObject(reader, 1500); CloseHandle(reader); }
@@ -885,6 +890,11 @@ static int run_selftest_cmdipc(void)
 
     printf("%s\n", ok ? "CMDIPC SELFTEST PASSED" : "CMDIPC SELFTEST FAILED");
 
+    /* Ask the server to exit over the pipe -- this works even when `server`
+     * is NULL (e.g. it escaped a restrictive job via Task Scheduler, so we
+     * never got a process handle for it; see spawn_server_ex). */
+    ipc_write_frame(pipe, MSG_KILL, NULL, 0);
+    Sleep(150);
     CancelIoEx(pipe, NULL);
     CloseHandle(pipe);
     strbuf_free(&frame);
