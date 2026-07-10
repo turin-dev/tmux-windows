@@ -85,6 +85,7 @@ tmux new -d -s work            REM start a session without attaching (background
 tmux new -s work -c C:\proj     REM start a session with a given starting directory
 tmux new -s work -x 200 -y 50  REM start a session at a given initial size
 tmux attach -t work            REM attach to an existing session (alias: a)
+tmux attach -d -t work         REM attach, kicking any client already attached to it
 tmux has-session -t work       REM exit 0 if that session's server is running (alias: has)
 tmux ls                        REM list running sessions (alias: list-sessions)
 tmux kill-session -t work      REM stop one session's server
@@ -113,6 +114,8 @@ anything is attached to it, so it works against a session started with
 tmux send-keys -t work "make test" Enter   REM type a command into the session
 tmux new-window -t work                    REM open a window in it
 tmux rename-session -t work built          REM rename it
+tmux list-windows -t work                  REM list windows (alias: lsw)
+tmux list-panes -t work                    REM list panes in the current window (alias: lsp)
 ```
 
 A `-t <session>` pair immediately after the subcommand name picks the
@@ -204,7 +207,8 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `send-keys <keys...>`, `display-panes`, `choose-window`, `display-message <text>`,
 `run-shell <cmd>`, `if-shell <cond> <then> [else]`, `clock-mode`,
 `command-prompt`, `set <option> <value>`,
-`bind <key> <command>`, `unbind <key>`, `source-file <path>`.
+`bind <key> <command>`, `unbind <key>`, `source-file <path>`,
+`list-windows` (alias `lsw`), `list-panes` (alias `lsp`).
 
 Multiple commands can be chained on one line (in a binding, config, or prompt)
 with a standalone `;`, e.g. `bind S "split-window -v ; select-pane -D"`.
@@ -236,6 +240,7 @@ build\tmuxw.exe --selftest-render [cmd]   REM ConPTY -> libvterm -> print grid
 build\tmuxw.exe --selftest-split          REM two panes + layout + compositor
 build\tmuxw.exe --selftest-ipc            REM full server/client round trip
 build\tmuxw.exe --selftest-cmdipc         REM one-off commands against a detached session
+build\tmuxw.exe --selftest-attachd        REM attach -d kicks an already-attached client
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session
 build\tmuxw.exe --selftest-cmd            REM command system + bindings + config

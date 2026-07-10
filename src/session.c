@@ -81,6 +81,9 @@ struct session {
     /* CSI (arrow/modified-arrow) accumulator while decoding prefix sequences */
     char            csi[16];
     int             csilen;
+    /* Text produced by a "listing" command (list-windows, list-panes) for
+     * session_run_capture to retrieve; empty after any other command. */
+    char            cmd_result[2048];
 };
 
 static void session_run_command(session_t *s, const char *line);
@@ -823,6 +826,50 @@ static void cmd_command_prompt(session_t *s, int argc, char **argv)
 
 typedef void (*cmd_fn)(session_t *, int, char **);
 
+/* list-windows / lsw: one line per window, "<index>: <name> (<n> panes)",
+ * with " (active)" on the current one. Written to s->cmd_result for
+ * session_run_capture. */
+static void cmd_list_windows(session_t *s, int argc, char **argv)
+{
+    int i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < s->nwindows && o < (int)sizeof(s->cmd_result) - 96; i++) {
+        pane_t *leaves[TMUXW_MAX_PANES];
+        int npanes = s->windows[i]->root ? layout_collect(s->windows[i]->root, leaves, TMUXW_MAX_PANES) : 0;
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%d: %s (%d panes)%s\n",
+                            i + s->base_index, s->windows[i]->name, npanes,
+                            (i == s->cur) ? " (active)" : "");
+        if (n < 0) break;
+        o += n;
+    }
+}
+
+/* list-panes / lsp: one line per pane of the current window, numbered the
+ * same way select-pane -t / display-panes do (traversal index +
+ * pane-base-index, not the pane's internal creation-order id). */
+static void cmd_list_panes(session_t *s, int argc, char **argv)
+{
+    window_t *w = (s->cur >= 0 && s->cur < s->nwindows) ? s->windows[s->cur] : NULL;
+    pane_t *leaves[TMUXW_MAX_PANES];
+    int count, i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    if (w == NULL || w->root == NULL)
+        return;
+    count = layout_collect(w->root, leaves, TMUXW_MAX_PANES);
+    for (i = 0; i < count && o < (int)sizeof(s->cmd_result) - 64; i++) {
+        pane_t *p = leaves[i];
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%d: [%dx%d]%s\n",
+                            i + s->pane_base_index, p->cols, p->rows,
+                            (p == w->active) ? " (active)" : "");
+        if (n < 0) break;
+        o += n;
+    }
+}
+
 static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "new-window",      cmd_new_window },
     { "split-window",    cmd_split_window },
@@ -867,6 +914,10 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "run-shell",       cmd_run_shell },
     { "if-shell",        cmd_if_shell },
     { "clock-mode",      cmd_clock_mode },
+    { "list-windows",    cmd_list_windows },
+    { "lsw",             cmd_list_windows },
+    { "list-panes",      cmd_list_panes },
+    { "lsp",             cmd_list_panes },
 };
 
 static void run_argv(session_t *s, int argc, char **argv)
@@ -1525,6 +1576,14 @@ static void session_load_config_path(session_t *s, const char *path)
 void session_run(session_t *s, const char *cmdline)
 {
     session_run_command(s, cmdline);
+}
+
+void session_run_capture(session_t *s, const char *cmdline, strbuf_t *out)
+{
+    s->cmd_result[0] = '\0';
+    session_run_command(s, cmdline);
+    if (out != NULL && s->cmd_result[0] != '\0')
+        strbuf_append(out, s->cmd_result, strlen(s->cmd_result));
 }
 
 void session_load_config(session_t *s)

@@ -57,6 +57,12 @@ int        session_take_detach(session_t *s);
 /* Run a single command line (e.g. "split-window -h"). */
 void       session_run(session_t *s, const char *cmdline);
 
+/* Like session_run, but if `cmdline` is (or chains) a command that produces
+ * text -- list-windows/lsw, list-panes/lsp -- that text is appended to
+ * `out`. `out` may be NULL to behave exactly like session_run. Ordinary
+ * (non-listing) commands leave `out` untouched. */
+void       session_run_capture(session_t *s, const char *cmdline, strbuf_t *out);
+
 /* Load and run the user's config (~/.tmuxw.conf) if present. */
 void       session_load_config(session_t *s);
 

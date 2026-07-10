@@ -41,8 +41,18 @@ static void srvlog(const char *msg)
  * owns `session_t` exclusively) ever calls session_run(), so the queue is the
  * only cross-thread synchronization needed. */
 
+/* One queued command plus a place for the main loop to leave its text result
+ * (if any -- see session_run_capture) and an event to signal when done. The
+ * acceptor thread that created a node owns it end to end: it pushes the
+ * node, waits on `done`, then reads `result` and frees the node itself. The
+ * main-loop thread (cmdq_drain) only ever fills `result` and signals `done`
+ * -- it never frees a node, so there's no free/use race between the two
+ * threads as long as the acceptor thread doesn't touch the node again before
+ * `done` is signaled. */
 typedef struct cmdq_node {
     char              *cmd;
+    strbuf_t           result;
+    HANDLE             done;
     struct cmdq_node  *next;
 } cmdq_node_t;
 
@@ -63,30 +73,38 @@ static void cmdq_free(cmdq_t *q)
     while (n) {
         cmdq_node_t *next = n->next;
         free(n->cmd);
+        strbuf_free(&n->result);
+        if (n->done) CloseHandle(n->done);
         free(n);
         n = next;
     }
     DeleteCriticalSection(&q->lock);
 }
 
-static void cmdq_push(cmdq_t *q, const char *cmd)
+/* Returns the pushed node (still owned by the caller) or NULL on allocation
+ * failure. */
+static cmdq_node_t *cmdq_push(cmdq_t *q, const char *cmd)
 {
-    cmdq_node_t *n = (cmdq_node_t *)malloc(sizeof(*n));
+    cmdq_node_t *n = (cmdq_node_t *)calloc(1, sizeof(*n));
     if (n == NULL)
-        return;
+        return NULL;
     n->cmd = _strdup(cmd);
+    strbuf_init(&n->result);
+    n->done = CreateEvent(NULL, TRUE, FALSE, NULL);
     n->next = NULL;
     EnterCriticalSection(&q->lock);
     if (q->tail) q->tail->next = n; else q->head = n;
     q->tail = n;
     LeaveCriticalSection(&q->lock);
+    return n;
 }
 
-/* Caller frees the returned string with free(). NULL when the queue is empty. */
-static char *cmdq_pop(cmdq_t *q)
+/* NULL when the queue is empty. The main loop (only) pops; it must call
+ * cmdq_finish() on whatever it pops, exactly once, to release it back to its
+ * owning acceptor thread. */
+static cmdq_node_t *cmdq_pop(cmdq_t *q)
 {
     cmdq_node_t *n;
-    char *cmd = NULL;
     EnterCriticalSection(&q->lock);
     n = q->head;
     if (n) {
@@ -94,20 +112,17 @@ static char *cmdq_pop(cmdq_t *q)
         if (q->head == NULL) q->tail = NULL;
     }
     LeaveCriticalSection(&q->lock);
-    if (n) {
-        cmd = n->cmd;
-        free(n);
-    }
-    return cmd;
+    return n;
 }
 
-/* Run every queued command against `sess`. Main-loop thread only. */
+/* Run every queued command against `sess`, capturing any text result, and
+ * hand each node back to its waiting acceptor thread. Main-loop thread only. */
 static void cmdq_drain(cmdq_t *q, session_t *sess)
 {
-    char *cmd;
-    while ((cmd = cmdq_pop(q)) != NULL) {
-        session_run(sess, cmd);
-        free(cmd);
+    cmdq_node_t *n;
+    while ((n = cmdq_pop(q)) != NULL) {
+        session_run_capture(sess, n->cmd, &n->result);
+        SetEvent(n->done);   /* the acceptor thread now owns *n again */
     }
 }
 
@@ -145,13 +160,31 @@ static DWORD WINAPI cmd_acceptor_thread(LPVOID arg)
         if (ipc_read_frame(pipe, &type, &payload) == 0 && type == MSG_CMD && payload.len > 0) {
             char *cmd = (char *)malloc(payload.len + 1);
             if (cmd) {
+                cmdq_node_t *n;
                 memcpy(cmd, payload.data, payload.len);
                 cmd[payload.len] = '\0';
-                cmdq_push(c->q, cmd);
+                n = cmdq_push(c->q, cmd);
                 free(cmd);
+                if (c->wake) SetEvent(c->wake);
+                /* The main loop drains this queue at least every ~50ms (see
+                 * cmdq_drain call sites in run_server/serve_client), so this
+                 * wait is bounded in every normal case; it only blocks
+                 * indefinitely if the server itself is stuck, in which case
+                 * the whole process (and this thread with it) is about to
+                 * go away anyway. Waiting forever avoids any timeout-driven
+                 * free/use race with the main loop over *n. */
+                if (n != NULL && n->done != NULL &&
+                    WaitForSingleObject(n->done, INFINITE) == WAIT_OBJECT_0) {
+                    if (n->result.len > 0)
+                        ipc_write_frame(pipe, MSG_CMD_TEXT, n->result.data, (uint32_t)n->result.len);
+                    else
+                        ipc_write_frame(pipe, MSG_CMD_OK, NULL, 0);
+                    free(n->cmd);
+                    strbuf_free(&n->result);
+                    CloseHandle(n->done);
+                    free(n);
+                }
             }
-            ipc_write_frame(pipe, MSG_CMD_OK, NULL, 0);
-            if (c->wake) SetEvent(c->wake);
         }
         strbuf_free(&payload);
 
@@ -378,6 +411,11 @@ int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd
         /* Detached: loop back and wait for the next client. Panes keep running;
          * their output accumulates until reattach. */
     }
+
+    /* One last drain so a command pushed right as the loop above was ending
+     * still gets a proper reply (its acceptor thread signaled) instead of
+     * being torn down mid-wait by cmdq_free below. */
+    cmdq_drain(&cmdq, sess);
 
     InterlockedExchange(&cmdctx.stop, 1);
     if (cmd_thread) {

@@ -8,7 +8,8 @@
  *   tmux new [-s name] [-c dir] [-x w -y h] [-d] [cmd]
  *                                         start a session (alias: new-session);
  *                                         -d starts it without attaching
- *   tmux attach [-t name]                 attach to an existing session (alias: a)
+ *   tmux attach [-t name] [-d]             attach to an existing session (alias: a);
+ *                                         -d kicks any client already attached to it
  *   tmux has-session [-t name]            exit 0 if the session is running (alias: has)
  *   tmux kill-session [-t name] [-a]      stop one session's server, or (-a) every
  *                                         other one
@@ -24,6 +25,7 @@
  *   tmux --selftest-split                 headless: two panes + compositor
  *   tmux --selftest-ipc                   headless: full server/client round trip
  *   tmux --selftest-cmdipc                headless: one-off commands vs. a detached session
+ *   tmux --selftest-attachd               headless: attach -d kicks an attached client
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
  */
@@ -255,14 +257,22 @@ static int spawn_server_ex(const wchar_t *pipename, const wchar_t *shell,
     return 0;
 }
 
+/* Forward declaration: defined later alongside the other cmd-pipe helpers,
+ * but attach_session (attach -d) needs it too. */
+static int send_one_cmd(const wchar_t *cmdpipename, const char *cmdline);
+
 /* Attach to session `name` (NULL/empty -> "default") as a thin client. If no
  * server is running: when start_if_missing is set, spawn one running `shell`
  * (starting in `cwd`, at `cols` x `rows` if given); otherwise fail (the
  * `attach` command must not create sessions). If `start_detached` is set
  * (new-session -d), the server is started/left running but this returns
- * without attaching a client, mirroring tmux's `-d`. */
+ * without attaching a client, mirroring tmux's `-d`. If `detach_others` is
+ * set (attach -d) and another client is already attached, that client is
+ * kicked -- the same as running detach-client against the session -- before
+ * we attach in its place. */
 static int attach_session(const wchar_t *name, const wchar_t *shell, int start_if_missing,
-                          const wchar_t *cwd, int cols, int rows, int start_detached)
+                          const wchar_t *cwd, int cols, int rows, int start_detached,
+                          int detach_others)
 {
     wchar_t pipename[512];
     HANDLE pipe;
@@ -271,6 +281,12 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
     ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
 
     pipe = ipc_client_connect_ex(pipename, 0, &busy);
+    if (pipe == INVALID_HANDLE_VALUE && busy && detach_others) {
+        wchar_t cmdpipename[512];
+        ipc_cmd_pipe_name(cmdpipename, 512, (name && name[0]) ? name : L"default");
+        if (send_one_cmd(cmdpipename, "detach-client") == 0)
+            pipe = ipc_client_connect_ex(pipename, 3000, &busy);
+    }
     if (pipe == INVALID_HANDLE_VALUE) {
         int rc;
         if (!start_if_missing) {
@@ -772,8 +788,9 @@ static int run_selftest_ipc(void)
     return ok ? 0 : 1;
 }
 
-/* Send one command line to a session's cmd pipe and wait for the ack. Returns
- * 0 on success. */
+/* Send one command line to a session's cmd pipe and wait for the reply. A
+ * command that produces text (list-windows, list-panes) has it printed to
+ * stdout. Returns 0 on success. */
 static int send_one_cmd(const wchar_t *cmdpipename, const char *cmdline)
 {
     HANDLE pipe = ipc_client_connect(cmdpipename, 3000);
@@ -785,7 +802,37 @@ static int send_one_cmd(const wchar_t *cmdpipename, const char *cmdline)
         return 1;
     ipc_write_frame(pipe, MSG_CMD, cmdline, (uint32_t)strlen(cmdline));
     strbuf_init(&reply);
-    ok = (ipc_read_frame(pipe, &type, &reply) == 0 && type == MSG_CMD_OK);
+    ok = (ipc_read_frame(pipe, &type, &reply) == 0 &&
+          (type == MSG_CMD_OK || type == MSG_CMD_TEXT));
+    if (ok && type == MSG_CMD_TEXT && reply.len > 0)
+        fwrite(reply.data, 1, reply.len, stdout);
+    strbuf_free(&reply);
+    CloseHandle(pipe);
+    return ok ? 0 : 1;
+}
+
+/* Like send_one_cmd, but for a test that needs to inspect a MSG_CMD_TEXT
+ * reply (list-windows, list-panes) rather than just its success/failure. */
+static int send_cmd_capture(const wchar_t *cmdpipename, const char *cmdline,
+                            char *out, size_t outcap)
+{
+    HANDLE pipe = ipc_client_connect(cmdpipename, 3000);
+    unsigned char type;
+    strbuf_t reply;
+    int ok;
+
+    out[0] = '\0';
+    if (pipe == INVALID_HANDLE_VALUE)
+        return 1;
+    ipc_write_frame(pipe, MSG_CMD, cmdline, (uint32_t)strlen(cmdline));
+    strbuf_init(&reply);
+    ok = (ipc_read_frame(pipe, &type, &reply) == 0 &&
+          (type == MSG_CMD_OK || type == MSG_CMD_TEXT));
+    if (ok && type == MSG_CMD_TEXT) {
+        size_t n = reply.len < outcap - 1 ? reply.len : outcap - 1;
+        memcpy(out, reply.data, n);
+        out[n] = '\0';
+    }
     strbuf_free(&reply);
     CloseHandle(pipe);
     return ok ? 0 : 1;
@@ -793,7 +840,9 @@ static int send_one_cmd(const wchar_t *cmdpipename, const char *cmdline)
 
 /* Commands sent over the cmd pipe reach a session whether or not a client is
  * attached: send-keys/rename-session-style commands while fully detached,
- * then again after attaching, and confirm both took effect. */
+ * then again after attaching, and confirm both took effect. Also covers
+ * list-windows/list-panes, which reply with their output as text (MSG_CMD_TEXT)
+ * instead of a bare ack. */
 static int run_selftest_cmdipc(void)
 {
     wchar_t pipename[512], cmdpipename[512];
@@ -819,6 +868,26 @@ static int run_selftest_cmdipc(void)
     if (send_one_cmd(cmdpipename, "new-window") != 0) {
         printf("FAIL: detached new-window command not acked\n");
         ok = 0;
+    }
+
+    /* list-windows/list-panes reply with their output as text, even while
+     * fully detached. */
+    {
+        char text[2048];
+        if (send_cmd_capture(cmdpipename, "list-windows", text, sizeof(text)) != 0) {
+            printf("FAIL: detached list-windows command not acked\n");
+            ok = 0;
+        } else if (strstr(text, "0:") == NULL || strstr(text, "1:") == NULL) {
+            printf("FAIL: list-windows text missing expected windows: [%s]\n", text);
+            ok = 0;
+        }
+        if (send_cmd_capture(cmdpipename, "list-panes", text, sizeof(text)) != 0) {
+            printf("FAIL: detached list-panes command not acked\n");
+            ok = 0;
+        } else if (strstr(text, "0:") == NULL) {
+            printf("FAIL: list-panes text missing expected pane: [%s]\n", text);
+            ok = 0;
+        }
     }
 
     /* Now attach and confirm both detached commands actually took effect. */
@@ -898,6 +967,109 @@ static int run_selftest_cmdipc(void)
     CancelIoEx(pipe, NULL);
     CloseHandle(pipe);
     strbuf_free(&frame);
+    if (server) {
+        if (WaitForSingleObject(server, 1000) != WAIT_OBJECT_0)
+            TerminateProcess(server, 0);
+        CloseHandle(server);
+    }
+    return ok ? 0 : 1;
+}
+
+typedef struct attachd_client {
+    HANDLE         pipe;
+    volatile LONG  got_detach;
+} attachd_client_t;
+
+static DWORD WINAPI attachd_reader(LPVOID arg)
+{
+    attachd_client_t *c = (attachd_client_t *)arg;
+    unsigned char type;
+    strbuf_t p;
+    strbuf_init(&p);
+    for (;;) {
+        if (ipc_read_frame(c->pipe, &type, &p) != 0)
+            break;
+        if (type == MSG_DETACH || type == MSG_EXIT) {
+            if (type == MSG_DETACH)
+                InterlockedExchange(&c->got_detach, 1);
+            break;
+        }
+    }
+    strbuf_free(&p);
+    return 0;
+}
+
+/* attach -d kicks whichever client is already attached: client A attaches
+ * first (so the pipe is busy, matching a real interactive session), then a
+ * simulated `attach -d` sends detach-client over the cmd pipe and takes A's
+ * place -- verifying both that A actually receives MSG_DETACH and that a new
+ * client can then attach where A couldn't a moment ago. */
+static int run_selftest_attachd(void)
+{
+    wchar_t pipename[512], cmdpipename[512];
+    HANDLE server = NULL;
+    attachd_client_t a;
+    HANDLE reader, pipeB = INVALID_HANDLE_VALUE;
+    unsigned char sz[4];
+    int ok = 1;
+
+    ipc_pipe_name(pipename, 512, L"attachdtest");
+    ipc_cmd_pipe_name(cmdpipename, 512, L"attachdtest");
+
+    if (spawn_server_ex(pipename, L"cmd.exe", NULL, 0, 0, &server) != 0) {
+        printf("FAIL: could not spawn server\n");
+        return 1;
+    }
+    Sleep(300);
+
+    memset(&a, 0, sizeof(a));
+    a.pipe = ipc_client_connect(pipename, 3000);
+    if (a.pipe == INVALID_HANDLE_VALUE) {
+        printf("FAIL: client A could not attach\n");
+        if (server) { TerminateProcess(server, 1); CloseHandle(server); }
+        return 1;
+    }
+    ipc_pack_size(sz, 80, 25);
+    ipc_write_frame(a.pipe, MSG_ATTACH, sz, 4);
+    reader = CreateThread(NULL, 0, attachd_reader, &a, 0, NULL);
+    Sleep(300);   /* let A settle in as the attached client */
+
+    {
+        HANDLE probe;
+        int busy = 0;
+        probe = ipc_client_connect_ex(pipename, 0, &busy);
+        if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+        if (!busy) { printf("FAIL: expected the pipe busy with client A attached\n"); ok = 0; }
+    }
+
+    if (send_one_cmd(cmdpipename, "detach-client") != 0) {
+        printf("FAIL: detach-client command not acked\n");
+        ok = 0;
+    }
+    pipeB = ipc_client_connect(pipename, 3000);
+    if (pipeB == INVALID_HANDLE_VALUE) {
+        printf("FAIL: client B could not attach after detach-client\n");
+        ok = 0;
+    } else {
+        ipc_write_frame(pipeB, MSG_ATTACH, sz, 4);
+    }
+
+    if (reader) WaitForSingleObject(reader, 2000);
+    if (!InterlockedCompareExchange(&a.got_detach, 0, 0)) {
+        printf("FAIL: client A never received MSG_DETACH\n");
+        ok = 0;
+    }
+
+    printf("%s\n", ok ? "ATTACHD SELFTEST PASSED" : "ATTACHD SELFTEST FAILED");
+
+    CloseHandle(a.pipe);
+    if (reader) CloseHandle(reader);
+    if (pipeB != INVALID_HANDLE_VALUE) {
+        ipc_write_frame(pipeB, MSG_KILL, NULL, 0);
+        Sleep(150);
+        CancelIoEx(pipeB, NULL);
+        CloseHandle(pipeB);
+    }
     if (server) {
         if (WaitForSingleObject(server, 1000) != WAIT_OBJECT_0)
             TerminateProcess(server, 0);
@@ -1478,6 +1650,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_ipc();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-cmdipc") == 0)
         return run_selftest_cmdipc();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-attachd") == 0)
+        return run_selftest_attachd();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-windows") == 0)
         return run_selftest_windows();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-copymode") == 0)
@@ -1543,7 +1717,7 @@ int wmain(int argc, wchar_t **argv)
 
     /* No arguments: attach to (or start) the default session. */
     if (argc == 1)
-        return attach_session(L"default", default_shell(), 1, NULL, 0, 0, 0);
+        return attach_session(L"default", default_shell(), 1, NULL, 0, 0, 0, 0);
 
     /* A tmux-style client subcommand: new / new-session / attach / a. */
     if (argv[1][0] != L'-') {
@@ -1554,11 +1728,11 @@ int wmain(int argc, wchar_t **argv)
 
         if (wcscmp(sub, L"new") == 0 || wcscmp(sub, L"new-session") == 0)
             return attach_session(a.name, a.has_shell ? a.shell : default_shell(), 1,
-                                  a.cwd[0] ? a.cwd : NULL, a.cols, a.rows, a.detach);
+                                  a.cwd[0] ? a.cwd : NULL, a.cols, a.rows, a.detach, 0);
 
         if (wcscmp(sub, L"attach") == 0 || wcscmp(sub, L"attach-session") == 0 ||
             wcscmp(sub, L"a") == 0)
-            return attach_session(a.name, default_shell(), 0, NULL, 0, 0, 0);
+            return attach_session(a.name, default_shell(), 0, NULL, 0, 0, 0, a.detach);
 
         if (wcscmp(sub, L"ls") == 0 || wcscmp(sub, L"list-sessions") == 0)
             return list_sessions();
