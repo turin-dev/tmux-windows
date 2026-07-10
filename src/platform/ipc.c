@@ -26,6 +26,13 @@ void ipc_pipe_name(wchar_t *out, size_t cap, const wchar_t *session)
     _snwprintf_s(out, cap, _TRUNCATE, L"\\\\.\\pipe\\tmuxw-%s-%s", user, session);
 }
 
+void ipc_cmd_pipe_name(wchar_t *out, size_t cap, const wchar_t *session)
+{
+    wchar_t base[512];
+    ipc_pipe_name(base, 512, session);
+    _snwprintf_s(out, cap, _TRUNCATE, L"%s-cmd", base);
+}
+
 int ipc_list_sessions(char *out, int max, int namecap)
 {
     wchar_t user[256];
@@ -50,7 +57,13 @@ int ipc_list_sessions(char *out, int max, int namecap)
     do {
         if (wcsncmp(fd.cFileName, prefix, prefixlen) == 0) {
             const wchar_t *sess = fd.cFileName + prefixlen;
-            char *dst = out + (size_t)count * namecap;
+            size_t slen = wcslen(sess);
+            char *dst;
+            /* Skip the one-shot command pipe (see ipc_cmd_pipe_name) --
+             * "<session>-cmd" is transport plumbing, not a session. */
+            if (slen > 4 && wcscmp(sess + slen - 4, L"-cmd") == 0)
+                continue;
+            dst = out + (size_t)count * namecap;
             WideCharToMultiByte(CP_UTF8, 0, sess, -1, dst, namecap, NULL, NULL);
             if (++count >= max)
                 break;
@@ -207,6 +220,57 @@ HANDLE ipc_server_listen(const wchar_t *pipename)
         return INVALID_HANDLE_VALUE;
     }
     return h;
+}
+
+HANDLE ipc_server_begin_listen(const wchar_t *pipename, ipc_accept_t *acc)
+{
+    HANDLE h = CreateNamedPipeW(
+        pipename,
+        PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        1, IPC_BUFSZ, IPC_BUFSZ, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        return INVALID_HANDLE_VALUE;
+
+    memset(acc, 0, sizeof(*acc));
+    acc->ev = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (acc->ev == NULL) {
+        CloseHandle(h);
+        return INVALID_HANDLE_VALUE;
+    }
+    acc->ov.hEvent = acc->ev;
+
+    if (ConnectNamedPipe(h, &acc->ov)) {
+        acc->immediate = 1;
+    } else {
+        DWORD e = GetLastError();
+        if (e == ERROR_PIPE_CONNECTED) {
+            acc->immediate = 1;
+        } else if (e != ERROR_IO_PENDING) {
+            CloseHandle(acc->ev);
+            CloseHandle(h);
+            return INVALID_HANDLE_VALUE;
+        }
+    }
+    return h;
+}
+
+int ipc_server_accept_poll(HANDLE pipe, ipc_accept_t *acc, DWORD timeout_ms)
+{
+    DWORD moved;
+    if (acc->immediate)
+        return 1;
+    if (WaitForSingleObject(acc->ev, timeout_ms) != WAIT_OBJECT_0)
+        return 0;
+    return GetOverlappedResult(pipe, &acc->ov, &moved, TRUE) ? 1 : -1;
+}
+
+void ipc_server_accept_cancel(HANDLE pipe, ipc_accept_t *acc)
+{
+    if (!acc->immediate)
+        CancelIoEx(pipe, &acc->ov);
+    if (acc->ev)
+        CloseHandle(acc->ev);
 }
 
 HANDLE ipc_client_connect(const wchar_t *pipename, int timeout_ms)

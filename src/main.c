@@ -12,6 +12,9 @@
  *   tmux has-session [-t name]            exit 0 if the session is running (alias: has)
  *   tmux kill-session [-t name] [-a]      stop one session's server, or (-a) every
  *                                         other one
+ *   tmux <cmd> [-t name] [args...]         run any other command (send-keys,
+ *                                         new-window, rename-session, ...)
+ *                                         against a session, attached or not
  *   tmux -V | --version                   print the version
  *   tmux --standalone [cmd]               run a session in one process (no server; debug)
  *   tmux --server <pipe> [--cwd dir] [--size WxH] [cmd]
@@ -20,6 +23,7 @@
  *   tmux --selftest-render [cmd]          headless: ConPTY -> libvterm -> dump grid
  *   tmux --selftest-split                 headless: two panes + compositor
  *   tmux --selftest-ipc                   headless: full server/client round trip
+ *   tmux --selftest-cmdipc                headless: one-off commands vs. a detached session
  *
  * The binary is installed under both names: `tmux` (familiar) and `tmuxw`.
  */
@@ -763,6 +767,135 @@ static int run_selftest_ipc(void)
     return ok ? 0 : 1;
 }
 
+/* Send one command line to a session's cmd pipe and wait for the ack. Returns
+ * 0 on success. */
+static int send_one_cmd(const wchar_t *cmdpipename, const char *cmdline)
+{
+    HANDLE pipe = ipc_client_connect(cmdpipename, 3000);
+    unsigned char type;
+    strbuf_t reply;
+    int ok;
+
+    if (pipe == INVALID_HANDLE_VALUE)
+        return 1;
+    ipc_write_frame(pipe, MSG_CMD, cmdline, (uint32_t)strlen(cmdline));
+    strbuf_init(&reply);
+    ok = (ipc_read_frame(pipe, &type, &reply) == 0 && type == MSG_CMD_OK);
+    strbuf_free(&reply);
+    CloseHandle(pipe);
+    return ok ? 0 : 1;
+}
+
+/* Commands sent over the cmd pipe reach a session whether or not a client is
+ * attached: send-keys/rename-session-style commands while fully detached,
+ * then again after attaching, and confirm both took effect. */
+static int run_selftest_cmdipc(void)
+{
+    wchar_t pipename[512], cmdpipename[512];
+    HANDLE server = NULL, pipe;
+    unsigned char sz[4];
+    strbuf_t frame;
+    int ok = 1;
+
+    ipc_pipe_name(pipename, 512, L"cmdiptest");
+    ipc_cmd_pipe_name(cmdpipename, 512, L"cmdiptest");
+
+    if (spawn_server_ex(pipename, L"cmd.exe", NULL, 0, 0, &server) != 0) {
+        printf("FAIL: could not spawn server\n");
+        return 1;
+    }
+    Sleep(300);   /* let the session (and its cmd-pipe acceptor thread) come up */
+
+    /* While nobody is attached: rename the session and open a second window. */
+    if (send_one_cmd(cmdpipename, "rename-session CMDIPCTEST") != 0) {
+        printf("FAIL: detached rename-session command not acked\n");
+        ok = 0;
+    }
+    if (send_one_cmd(cmdpipename, "new-window") != 0) {
+        printf("FAIL: detached new-window command not acked\n");
+        ok = 0;
+    }
+
+    /* Now attach and confirm both detached commands actually took effect. */
+    pipe = ipc_client_connect(pipename, 3000);
+    if (pipe == INVALID_HANDLE_VALUE) {
+        printf("FAIL: could not attach after detached commands\n");
+        if (server) { TerminateProcess(server, 1); CloseHandle(server); }
+        return 1;
+    }
+    ipc_pack_size(sz, 80, 25);
+    ipc_write_frame(pipe, MSG_ATTACH, sz, 4);
+    strbuf_init(&frame);
+    {
+        unsigned char type;
+        strbuf_t payload;
+        strbuf_init(&payload);
+        Sleep(300);
+        /* Drain whatever frames arrived so far without blocking forever. */
+        for (;;) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL) || avail == 0)
+                break;
+            if (ipc_read_frame(pipe, &type, &payload) != 0)
+                break;
+            if (type == MSG_OUTPUT)
+                strbuf_append(&frame, payload.data, payload.len);
+        }
+        strbuf_free(&payload);
+    }
+    strbuf_putc(&frame, '\0');
+
+    if (strstr(frame.data, "CMDIPCTEST") == NULL) {
+        printf("FAIL: rename-session sent while detached did not apply\n");
+        ok = 0;
+    }
+    if (strstr(frame.data, "1:cmd*") == NULL) {
+        printf("FAIL: new-window sent while detached did not apply\n");
+        ok = 0;
+    }
+
+    /* And once attached, a cmd-pipe command should still land (drained by
+     * serve_client's loop rather than the outer accept loop). */
+    if (send_one_cmd(cmdpipename, "rename-window ATTACHEDCMD") != 0) {
+        printf("FAIL: attached rename-window command not acked\n");
+        ok = 0;
+    }
+    Sleep(300);
+    strbuf_clear(&frame);
+    {
+        unsigned char type;
+        strbuf_t payload;
+        strbuf_init(&payload);
+        for (;;) {
+            DWORD avail = 0;
+            if (!PeekNamedPipe(pipe, NULL, 0, NULL, &avail, NULL) || avail == 0)
+                break;
+            if (ipc_read_frame(pipe, &type, &payload) != 0)
+                break;
+            if (type == MSG_OUTPUT)
+                strbuf_append(&frame, payload.data, payload.len);
+        }
+        strbuf_free(&payload);
+    }
+    strbuf_putc(&frame, '\0');
+    if (strstr(frame.data, "ATTACHEDCMD") == NULL) {
+        printf("FAIL: rename-window sent while attached did not apply\n");
+        ok = 0;
+    }
+
+    printf("%s\n", ok ? "CMDIPC SELFTEST PASSED" : "CMDIPC SELFTEST FAILED");
+
+    CancelIoEx(pipe, NULL);
+    CloseHandle(pipe);
+    strbuf_free(&frame);
+    if (server) {
+        if (WaitForSingleObject(server, 1000) != WAIT_OBJECT_0)
+            TerminateProcess(server, 0);
+        CloseHandle(server);
+    }
+    return ok ? 0 : 1;
+}
+
 /* Drive a session directly (no ConPTY output needed): create windows via the
  * prefix key and verify the status bar reflects them. */
 static int run_selftest_windows(void)
@@ -1333,6 +1466,8 @@ int wmain(int argc, wchar_t **argv)
         return run_selftest_split();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-ipc") == 0)
         return run_selftest_ipc();
+    if (argc > 1 && wcscmp(argv[1], L"--selftest-cmdipc") == 0)
+        return run_selftest_cmdipc();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-windows") == 0)
         return run_selftest_windows();
     if (argc > 1 && wcscmp(argv[1], L"--selftest-copymode") == 0)
@@ -1427,12 +1562,51 @@ int wmain(int argc, wchar_t **argv)
         if (wcscmp(sub, L"kill-server") == 0)
             return kill_server_cmd();
 
-        fprintf(stderr, "tmux: unknown command: %ls\n", sub);
-        fprintf(stderr,
-                "usage: tmux [new|new-session|attach|attach-session|a|ls|has-session|has|"
-                "kill-session [-a]|kill-server] [-s|-t name] [-c dir] [-x width] [-y height] "
-                "[-d] [command]\n");
-        return 1;
+        /* Anything else is forwarded verbatim to a session's server as an
+         * in-session command (send-keys, rename-session, new-window, ...),
+         * whether or not a client is attached to it -- mirroring how real
+         * tmux runs one-off commands from a plain shell, e.g.
+         * `tmux send-keys -t work 'make' Enter`. A `-t <session>` pair
+         * immediately after the subcommand name picks the session (default
+         * otherwise); it is intentionally recognized *only* in that
+         * position, since several in-session commands (select-window -t,
+         * select-pane -t, swap-window -t, ...) use -t for their own
+         * window/pane-local targeting and must receive it unchanged. */
+        {
+            wchar_t name[256] = L"";
+            wchar_t cmdpipename[512];
+            char cmdline[CMD_MAX];
+            char subn[64];
+            int start = 2, i;
+
+            if (argc > 3 && wcscmp(argv[2], L"-t") == 0) {
+                wcscpy_s(name, 256, argv[3]);
+                start = 4;
+            }
+
+            WideCharToMultiByte(CP_UTF8, 0, sub, -1, subn, sizeof(subn), NULL, NULL);
+            strcpy_s(cmdline, CMD_MAX, subn);
+            for (i = start; i < argc; i++) {
+                char narrow[1024];
+                WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, narrow, sizeof(narrow), NULL, NULL);
+                strcat_s(cmdline, CMD_MAX, " ");
+                if (strpbrk(narrow, " \t") != NULL && narrow[0] != '"') {
+                    strcat_s(cmdline, CMD_MAX, "\"");
+                    strcat_s(cmdline, CMD_MAX, narrow);
+                    strcat_s(cmdline, CMD_MAX, "\"");
+                } else {
+                    strcat_s(cmdline, CMD_MAX, narrow);
+                }
+            }
+
+            ipc_cmd_pipe_name(cmdpipename, 512, name[0] ? name : L"default");
+            if (send_one_cmd(cmdpipename, cmdline) != 0) {
+                fprintf(stderr, "tmux: no server running for session '%ls'\n",
+                        name[0] ? name : L"default");
+                return 1;
+            }
+            return 0;
+        }
     }
 
     fprintf(stderr, "tmux: unknown option: %ls\n", argv[1]);

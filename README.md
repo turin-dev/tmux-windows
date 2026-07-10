@@ -101,6 +101,25 @@ SSH disconnect, which on Windows normally tears down everything in the login
 session's process tree; the server escapes that so reconnecting finds your
 panes and shells exactly as you left them.
 
+### Scripting: run a command without attaching
+
+Any subcommand that isn't one of the ones above (`send-keys`, `new-window`,
+`split-window`, `rename-session`, `kill-window`, `set`, ...) is forwarded to a
+session's server as a single in-session command line — whether or not
+anything is attached to it, so it works against a session started with
+`new -d`:
+
+```
+tmux send-keys -t work "make test" Enter   REM type a command into the session
+tmux new-window -t work                    REM open a window in it
+tmux rename-session -t work built          REM rename it
+```
+
+A `-t <session>` pair immediately after the subcommand name picks the
+session (default session otherwise); it's only recognized in that position,
+since several in-session commands (`select-window -t`, `select-pane -t`, ...)
+use `-t` for their own window/pane-local targeting.
+
 ### Key bindings (prefix = Ctrl-B)
 
 | Key            | Action                          |
@@ -216,6 +235,7 @@ build\tmuxw.exe --selftest [cmd]          REM ConPTY output straight to stdout
 build\tmuxw.exe --selftest-render [cmd]   REM ConPTY -> libvterm -> print grid
 build\tmuxw.exe --selftest-split          REM two panes + layout + compositor
 build\tmuxw.exe --selftest-ipc            REM full server/client round trip
+build\tmuxw.exe --selftest-cmdipc         REM one-off commands against a detached session
 build\tmuxw.exe --selftest-windows        REM window (tab) switching + status bar
 build\tmuxw.exe --selftest-copymode       REM enter/exit copy mode via the session
 build\tmuxw.exe --selftest-cmd            REM command system + bindings + config

@@ -30,6 +30,138 @@ static void srvlog(const char *msg)
     }
 }
 
+/* ----- one-shot command connections ------------------------------------------
+ *
+ * A CLI invocation like `tmux send-keys -t work ...` needs to run a command
+ * against a session's server whether or not anything is interactively
+ * attached to it right now. Those connections land on a *separate* pipe (see
+ * ipc_cmd_pipe_name) so they never contend with the single-instance
+ * interactive-attach pipe. A dedicated thread accepts them and hands the
+ * command line off to this queue; only the main loop thread (which already
+ * owns `session_t` exclusively) ever calls session_run(), so the queue is the
+ * only cross-thread synchronization needed. */
+
+typedef struct cmdq_node {
+    char              *cmd;
+    struct cmdq_node  *next;
+} cmdq_node_t;
+
+typedef struct {
+    cmdq_node_t      *head, *tail;
+    CRITICAL_SECTION  lock;
+} cmdq_t;
+
+static void cmdq_init(cmdq_t *q)
+{
+    q->head = q->tail = NULL;
+    InitializeCriticalSection(&q->lock);
+}
+
+static void cmdq_free(cmdq_t *q)
+{
+    cmdq_node_t *n = q->head;
+    while (n) {
+        cmdq_node_t *next = n->next;
+        free(n->cmd);
+        free(n);
+        n = next;
+    }
+    DeleteCriticalSection(&q->lock);
+}
+
+static void cmdq_push(cmdq_t *q, const char *cmd)
+{
+    cmdq_node_t *n = (cmdq_node_t *)malloc(sizeof(*n));
+    if (n == NULL)
+        return;
+    n->cmd = _strdup(cmd);
+    n->next = NULL;
+    EnterCriticalSection(&q->lock);
+    if (q->tail) q->tail->next = n; else q->head = n;
+    q->tail = n;
+    LeaveCriticalSection(&q->lock);
+}
+
+/* Caller frees the returned string with free(). NULL when the queue is empty. */
+static char *cmdq_pop(cmdq_t *q)
+{
+    cmdq_node_t *n;
+    char *cmd = NULL;
+    EnterCriticalSection(&q->lock);
+    n = q->head;
+    if (n) {
+        q->head = n->next;
+        if (q->head == NULL) q->tail = NULL;
+    }
+    LeaveCriticalSection(&q->lock);
+    if (n) {
+        cmd = n->cmd;
+        free(n);
+    }
+    return cmd;
+}
+
+/* Run every queued command against `sess`. Main-loop thread only. */
+static void cmdq_drain(cmdq_t *q, session_t *sess)
+{
+    char *cmd;
+    while ((cmd = cmdq_pop(q)) != NULL) {
+        session_run(sess, cmd);
+        free(cmd);
+    }
+}
+
+typedef struct {
+    wchar_t          pipename[512];
+    cmdq_t           *q;
+    HANDLE            wake;      /* nudge the main loop to drain promptly */
+    volatile LONG     stop;
+} cmd_acceptor_ctx_t;
+
+static DWORD WINAPI cmd_acceptor_thread(LPVOID arg)
+{
+    cmd_acceptor_ctx_t *c = (cmd_acceptor_ctx_t *)arg;
+    for (;;) {
+        HANDLE pipe;
+        unsigned char type;
+        strbuf_t payload;
+
+        if (InterlockedCompareExchange(&c->stop, 0, 0))
+            break;
+
+        pipe = ipc_server_listen(c->pipename);
+        if (pipe == INVALID_HANDLE_VALUE) {
+            if (InterlockedCompareExchange(&c->stop, 0, 0))
+                break;
+            Sleep(50);
+            continue;
+        }
+        if (InterlockedCompareExchange(&c->stop, 0, 0)) {
+            CloseHandle(pipe);
+            break;
+        }
+
+        strbuf_init(&payload);
+        if (ipc_read_frame(pipe, &type, &payload) == 0 && type == MSG_CMD && payload.len > 0) {
+            char *cmd = (char *)malloc(payload.len + 1);
+            if (cmd) {
+                memcpy(cmd, payload.data, payload.len);
+                cmd[payload.len] = '\0';
+                cmdq_push(c->q, cmd);
+                free(cmd);
+            }
+            ipc_write_frame(pipe, MSG_CMD_OK, NULL, 0);
+            if (c->wake) SetEvent(c->wake);
+        }
+        strbuf_free(&payload);
+
+        FlushFileBuffers(pipe);
+        DisconnectNamedPipe(pipe);
+        CloseHandle(pipe);
+    }
+    return 0;
+}
+
 /* ----- one attached client -------------------------------------------------- */
 
 typedef struct srv_client {
@@ -79,7 +211,7 @@ static DWORD WINAPI srv_reader(LPVOID arg)
 /* Serve one connected client until it detaches, disconnects, or the session
  * ends. Returns 1 if the session is still alive afterward (client left), 0 if
  * the session ended. */
-static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *frame)
+static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *frame, cmdq_t *cmdq)
 {
     srv_client_t c;
     strbuf_t local;
@@ -124,6 +256,7 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
             strbuf_clear(&local);
         }
 
+        cmdq_drain(cmdq, sess);
         session_tick(sess);
 
         if (InterlockedCompareExchange(&c.kill, 0, 0)) {
@@ -172,6 +305,9 @@ int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd
     HANDLE wake;
     session_t *sess;
     strbuf_t frame;
+    cmdq_t cmdq;
+    cmd_acceptor_ctx_t cmdctx;
+    HANDLE cmd_thread;
 
     srvlog("run_server: start");
     wake = CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -185,17 +321,54 @@ int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd
     srvlog("run_server: session created");
     strbuf_init(&frame);
 
+    cmdq_init(&cmdq);
+    memset(&cmdctx, 0, sizeof(cmdctx));
+    /* ipc_cmd_pipe_name derives from a *session name*, but here we only have
+     * the already-built interactive pipe name; append the same "-cmd" suffix
+     * directly rather than re-deriving from a session name. */
+    _snwprintf_s(cmdctx.pipename, 512, _TRUNCATE, L"%s-cmd", pipename);
+    cmdctx.q = &cmdq;
+    cmdctx.wake = wake;
+    cmd_thread = CreateThread(NULL, 0, cmd_acceptor_thread, &cmdctx, 0, NULL);
+
     while (session_alive(sess)) {
+        ipc_accept_t acc;
         HANDLE pipe;
-        int still_alive;
+        int rc = 0, still_alive;
+
         srvlog("run_server: listening");
-        pipe = ipc_server_listen(pipename);
+        pipe = ipc_server_begin_listen(pipename, &acc);
         if (pipe == INVALID_HANDLE_VALUE) {
             srvlog("run_server: listen FAILED");
             break;
         }
+
+        /* Detached: poll for the next client while still servicing queued
+         * one-shot commands and pumping pane output, instead of blocking. */
+        for (;;) {
+            rc = ipc_server_accept_poll(pipe, &acc, 50);
+            if (rc != 0)
+                break;
+            cmdq_drain(&cmdq, sess);
+            session_tick(sess);
+            session_pump(sess);
+            if (!session_alive(sess))
+                break;
+        }
+        ipc_server_accept_cancel(pipe, &acc);
+
+        if (!session_alive(sess)) {
+            CloseHandle(pipe);
+            break;
+        }
+        if (rc != 1) {
+            srvlog("run_server: accept error, retrying");
+            CloseHandle(pipe);
+            continue;
+        }
+
         srvlog("run_server: client connected");
-        still_alive = serve_client(sess, pipe, wake, &frame);
+        still_alive = serve_client(sess, pipe, wake, &frame, &cmdq);
         srvlog(still_alive ? "run_server: client left (alive)" : "run_server: session ended");
         FlushFileBuffers(pipe);
         DisconnectNamedPipe(pipe);
@@ -205,6 +378,16 @@ int run_server(const wchar_t *pipename, const wchar_t *shell, const wchar_t *cwd
         /* Detached: loop back and wait for the next client. Panes keep running;
          * their output accumulates until reattach. */
     }
+
+    InterlockedExchange(&cmdctx.stop, 1);
+    if (cmd_thread) {
+        /* Unblock a pending accept in the acceptor thread. */
+        HANDLE dummy = ipc_client_connect(cmdctx.pipename, 0);
+        if (dummy != INVALID_HANDLE_VALUE) CloseHandle(dummy);
+        WaitForSingleObject(cmd_thread, 1000);
+        CloseHandle(cmd_thread);
+    }
+    cmdq_free(&cmdq);
 
     session_free(sess);
     strbuf_free(&frame);
