@@ -1188,6 +1188,30 @@ static void cmd_respawn_window(session_t *s, int argc, char **argv)
     if (w) { window_respawn_all(w); mark(s, 1); }
 }
 
+/* pipe-pane [-o] [<shell-command>]: mirror the active pane's raw output to a
+ * spawned shell command's stdin (e.g. `pipe-pane 'cat >> log.txt'`), until
+ * toggled off by running it again with -o or no command. */
+static void cmd_pipe_pane(session_t *s, int argc, char **argv)
+{
+    window_t *w = cur_window(s);
+    const char *cmdline = NULL;
+    int i, off = 0;
+    if (w == NULL || w->active == NULL)
+        return;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) off = 1;
+        else cmdline = argv[i];
+    }
+    if (off || cmdline == NULL)
+        pane_pipe_stop(w->active);
+    else
+        pane_pipe_start(w->active, cmdline);
+}
+
+/* Forward-declared so it can appear in CMD_TABLE; defined after it since it
+ * needs to enumerate the table. */
+static void cmd_list_commands(session_t *s, int argc, char **argv);
+
 static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "new-window",      cmd_new_window },
     { "split-window",    cmd_split_window },
@@ -1257,7 +1281,26 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "confirm",         cmd_confirm_before },
     { "respawn-pane",    cmd_respawn_pane },
     { "respawn-window",  cmd_respawn_window },
+    { "pipe-pane",       cmd_pipe_pane },
+    { "list-commands",   cmd_list_commands },
+    { "lscm",            cmd_list_commands },
 };
+
+/* list-commands / lscm: every command name this build recognizes. */
+static void cmd_list_commands(session_t *s, int argc, char **argv)
+{
+    size_t i;
+    int o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < sizeof(CMD_TABLE) / sizeof(CMD_TABLE[0]) &&
+                o < (int)sizeof(s->cmd_result) - 32; i++) {
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%s\n", CMD_TABLE[i].name);
+        if (n < 0) break;
+        o += n;
+    }
+}
 
 static void run_argv(session_t *s, int argc, char **argv)
 {

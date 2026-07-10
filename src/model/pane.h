@@ -28,6 +28,8 @@ typedef struct pane {
     int              has_conpty;
     wchar_t          cmdline[1024];     /* remembered for pane_respawn */
     wchar_t          cwd[MAX_PATH];     /* ditto; empty means "inherited" */
+    HANDLE           pipe_write;        /* pipe-pane target's stdin, or NULL */
+    HANDLE           pipe_proc;         /* the piped child's process, or NULL */
 } pane_t;
 
 /* Spawn `cmdline` in a cols x rows pseudo console, starting in `cwd`
@@ -57,5 +59,14 @@ int     pane_child_exited(pane_t *p);
  * original cmdline/cwd again. Used by respawn-pane/respawn-window. Returns 0
  * on success. */
 int     pane_respawn(pane_t *p);
+
+/* pipe-pane: mirror this pane's raw output to `shell_cmdline`'s stdin (run
+ * via cmd.exe /c), replacing any previous pipe-pane target. Returns 0 on
+ * success. */
+int     pane_pipe_start(pane_t *p, const char *shell_cmdline);
+/* Stop mirroring (pipe-pane with no command, or -o). Safe to call when not
+ * piping. */
+void    pane_pipe_stop(pane_t *p);
+int     pane_pipe_active(const pane_t *p);
 
 #endif /* TMUXW_MODEL_PANE_H */

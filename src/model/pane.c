@@ -1,6 +1,7 @@
 /* pane.c — see pane.h. */
 #include "model/pane.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #define PANE_IO_BUF 8192
@@ -18,6 +19,15 @@ static DWORD WINAPI pane_reader(LPVOID arg)
             break;
         EnterCriticalSection(&p->lock);
         strbuf_append(&p->pending, buf, n);
+        if (p->pipe_write) {
+            DWORD written = 0;
+            if (!WriteFile(p->pipe_write, buf, n, &written, NULL)) {
+                /* The piped process went away; stop targeting it. */
+                CloseHandle(p->pipe_write);
+                p->pipe_write = NULL;
+                if (p->pipe_proc) { CloseHandle(p->pipe_proc); p->pipe_proc = NULL; }
+            }
+        }
         LeaveCriticalSection(&p->lock);
         if (p->wake)
             SetEvent(p->wake);
@@ -69,6 +79,7 @@ void pane_close(pane_t *p)
 {
     if (p == NULL)
         return;
+    pane_pipe_stop(p);
     /* Closing the pseudo console makes the reader's ReadFile hit EOF. */
     if (p->has_conpty)
         conpty_close(&p->pty);
@@ -115,6 +126,70 @@ int pane_respawn(pane_t *p)
         return -1;
     }
     return 0;
+}
+
+int pane_pipe_start(pane_t *p, const char *shell_cmdline)
+{
+    HANDLE rd = NULL, wr = NULL;
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    char full[1024];
+
+    pane_pipe_stop(p);   /* replace any existing target */
+
+    ZeroMemory(&sa, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    if (!CreatePipe(&rd, &wr, &sa, 0))
+        return -1;
+    SetHandleInformation(wr, HANDLE_FLAG_INHERIT, 0);   /* we keep the write end */
+
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = rd;
+    si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    ZeroMemory(&pi, sizeof(pi));
+
+    _snprintf_s(full, sizeof(full), _TRUNCATE, "cmd.exe /c %s", shell_cmdline);
+    if (!CreateProcessA(NULL, full, NULL, NULL, TRUE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        CloseHandle(rd);
+        CloseHandle(wr);
+        return -1;
+    }
+    CloseHandle(rd);
+    CloseHandle(pi.hThread);
+
+    EnterCriticalSection(&p->lock);
+    p->pipe_write = wr;
+    p->pipe_proc = pi.hProcess;
+    LeaveCriticalSection(&p->lock);
+    return 0;
+}
+
+void pane_pipe_stop(pane_t *p)
+{
+    HANDLE w, proc;
+    EnterCriticalSection(&p->lock);
+    w = p->pipe_write;
+    proc = p->pipe_proc;
+    p->pipe_write = NULL;
+    p->pipe_proc = NULL;
+    LeaveCriticalSection(&p->lock);
+    if (w)
+        CloseHandle(w);        /* child sees EOF on its stdin */
+    if (proc) {
+        WaitForSingleObject(proc, 200);
+        CloseHandle(proc);
+    }
+}
+
+int pane_pipe_active(const pane_t *p)
+{
+    return p->pipe_write != NULL;
 }
 
 void pane_apply_geometry(pane_t *p)

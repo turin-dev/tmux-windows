@@ -216,7 +216,8 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `delete-buffer [-b name]`, `load-buffer [-b name] <path>`, `save-buffer [-b name] <path>`,
 `capture-pane` (alias `capturep`), `clear-history` (alias `clearhist`),
 `confirm-before -p <message> <command>` (alias `confirm`),
-`respawn-pane`, `respawn-window`.
+`respawn-pane`, `respawn-window`,
+`pipe-pane [-o] [<shell-command>]`, `list-commands` (alias `lscm`).
 
 Paste buffers are a small internal stack (newest on top), separate from but
 kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`

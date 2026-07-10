@@ -176,5 +176,15 @@ void conpty_close(conpty_t *pty)
     if (pty->input_write)  { CloseHandle(pty->input_write); pty->input_write = NULL; }
     if (pty->output_read)  { CloseHandle(pty->output_read); pty->output_read = NULL; }
     if (pty->thread)       { CloseHandle(pty->thread); pty->thread = NULL; }
-    if (pty->process)      { CloseHandle(pty->process); pty->process = NULL; }
+    if (pty->process) {
+        /* ClosePseudoConsole above should make a well-behaved console child
+         * exit on its own, but that's not guaranteed for every child/timing
+         * (e.g. one that hasn't finished starting up yet) -- without this,
+         * such a child would keep running as an untracked orphan process
+         * the moment we drop our last handle to it below. */
+        if (WaitForSingleObject(pty->process, 500) != WAIT_OBJECT_0)
+            TerminateProcess(pty->process, 0);
+        CloseHandle(pty->process);
+        pty->process = NULL;
+    }
 }
