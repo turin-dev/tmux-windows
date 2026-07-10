@@ -311,7 +311,14 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
     ns_session_name(name, nsname, 512);
     ipc_pipe_name(pipename, 512, nsname);
 
-    pipe = ipc_client_connect_ex(pipename, 0, &busy);
+    /* A session's server briefly has no pipe instance listening while it
+     * loops from "just detached" back to accepting the next client (close
+     * the old instance, then CreateNamedPipeW + ConnectNamedPipe the next
+     * one) -- a few milliseconds, but a plain zero-timeout attempt can land
+     * squarely in that gap and misreport a perfectly live session as "no
+     * server running". Give it a small window to clear before concluding
+     * that. */
+    pipe = ipc_client_connect_ex(pipename, 500, &busy);
     if (pipe == INVALID_HANDLE_VALUE && busy && detach_others) {
         wchar_t cmdpipename[512];
         ipc_cmd_pipe_name(cmdpipename, 512, nsname);
@@ -455,7 +462,7 @@ static int kill_one_ex(const wchar_t *name, int *out_busy)
     HANDLE pipe;
     ns_session_name(name, nsname, 512);
     ipc_pipe_name(pipename, 512, nsname);
-    pipe = ipc_client_connect_ex(pipename, 0, out_busy);
+    pipe = ipc_client_connect_ex(pipename, 500, out_busy);   /* see attach_session's comment on the detach/relisten gap */
     if (pipe == INVALID_HANDLE_VALUE)
         return 1;
     ipc_write_frame(pipe, MSG_KILL, NULL, 0);
@@ -515,7 +522,7 @@ static int has_session_cmd(const wchar_t *name)
     int busy = 0;
     ns_session_name(name, nsname, 512);
     ipc_pipe_name(pipename, 512, nsname);
-    pipe = ipc_client_connect_ex(pipename, 0, &busy);
+    pipe = ipc_client_connect_ex(pipename, 500, &busy);   /* see attach_session's comment on the detach/relisten gap */
     if (pipe == INVALID_HANDLE_VALUE) {
         if (busy)
             return 0;
