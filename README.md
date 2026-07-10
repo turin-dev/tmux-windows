@@ -228,7 +228,7 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `pipe-pane [-o] [<shell-command>]`, `list-commands` (alias `lscm`),
 `list-clients` (alias `lsc`),
 `set-environment [-u] <name> [value]`, `show-environment`, `unset-environment <name>`,
-`choose-buffer`, `set-hook [-u] <event> <command>`, `show-hooks`,
+`choose-buffer`, `choose-client`, `set-hook [-u] <event> <command>`, `show-hooks`,
 `wait-for [-S|-L|-U] <channel>`.
 
 `set-environment` overrides apply to panes created from then on (`new-window`,

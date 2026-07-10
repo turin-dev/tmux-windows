@@ -1227,6 +1227,20 @@ static void cmd_display_message(session_t *s, int argc, char **argv)
     show_message(s, out);
 }
 
+/* choose-client: real tmux lets you switch which of several simultaneous
+ * clients' view you're looking at. A session's server here only ever serves
+ * one interactive client at a time (see list-clients), so there is nothing
+ * to choose between -- this just reports the current one, same information
+ * as list-clients, via the message overlay instead of text output. */
+static void cmd_choose_client(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (s->attached)
+        show_message(s, "1 client attached (this one)");
+    else
+        show_message(s, "no client attached");
+}
+
 static void cmd_run_shell(session_t *s, int argc, char **argv)
 {
     char out[512];
@@ -1604,6 +1618,7 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "choose-window",   cmd_choose_window },
     { "choose-tree",     cmd_choose_window },
     { "choose-buffer",   cmd_choose_buffer },
+    { "choose-client",   cmd_choose_client },
     { "display-message", cmd_display_message },
     { "run-shell",       cmd_run_shell },
     { "if-shell",        cmd_if_shell },
