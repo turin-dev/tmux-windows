@@ -85,6 +85,7 @@ tmux new -d -s work            REM start a session without attaching (background
 tmux new -s work -c C:\proj     REM start a session with a given starting directory
 tmux new -s work -x 200 -y 50  REM start a session at a given initial size
 tmux -f other.conf new -s work REM start a session, loading an alternate config file
+tmux -L work new -s build      REM start a session in an independent namespace
 tmux attach -t work            REM attach to an existing session (alias: a)
 tmux attach -d -t work         REM attach, kicking any client already attached to it
 tmux has-session -t work       REM exit 0 if that session's server is running (alias: has)
@@ -95,6 +96,13 @@ tmux kill-server               REM stop every tmuxw session
 tmux -V                        REM print the version (alias: --version)
 tmuxw --standalone             REM run in one process, no server (for debugging)
 ```
+
+`-L <name>` / `-S <path>` put every session created or targeted by that
+invocation in an independent namespace, so `-L work` and the default
+namespace never collide even if they use the same session names. Windows
+named pipes don't have a real notion of a "socket path" the way `-S` implies
+on Unix, so both flags do the same thing here: fold a token into the pipe
+name.
 
 Each named session is an independent background server, so sessions detach and
 reattach separately and `tmux ls` enumerates them. A session's server keeps
@@ -217,7 +225,12 @@ Commands: `new-window`, `split-window [-h|-v]`, `select-pane [-U|-D|-L|-R|-t N]`
 `capture-pane` (alias `capturep`), `clear-history` (alias `clearhist`),
 `confirm-before -p <message> <command>` (alias `confirm`),
 `respawn-pane`, `respawn-window`,
-`pipe-pane [-o] [<shell-command>]`, `list-commands` (alias `lscm`).
+`pipe-pane [-o] [<shell-command>]`, `list-commands` (alias `lscm`),
+`list-clients` (alias `lsc`),
+`set-environment [-u] <name> [value]`, `show-environment`, `unset-environment <name>`.
+
+`set-environment` overrides apply to panes created from then on (`new-window`,
+`split-window`), not retroactively to already-running ones, matching tmux.
 
 Paste buffers are a small internal stack (newest on top), separate from but
 kept in sync with the Windows clipboard: copy-mode yanks and `capture-pane`

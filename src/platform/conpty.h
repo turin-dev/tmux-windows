@@ -18,12 +18,16 @@ typedef struct conpty {
 } conpty_t;
 
 /* Spawn `cmdline` in a fresh pseudo console sized `cols` x `rows`, starting in
- * `cwd` (NULL/empty inherits the caller's current directory).
+ * `cwd` (NULL/empty inherits the caller's current directory), with
+ * environment `envblock` (NULL inherits the caller's environment as before;
+ * otherwise a buffer of "NAME=VALUE\0" entries terminated by an extra NUL,
+ * as returned by GetEnvironmentStringsW / built by session.c's
+ * build_env_block for set-environment).
  * `cmdline` must be a mutable-safe command line (CreateProcessW may modify a
  * copy internally; we copy it ourselves). Returns 0 on success, else a Win32
  * error / HRESULT-style non-zero code. On failure `*pty` is left zeroed. */
 int conpty_spawn(conpty_t *pty, const wchar_t *cmdline, short cols, short rows,
-                  const wchar_t *cwd);
+                  const wchar_t *cwd, const wchar_t *envblock);
 
 /* Resize the pseudo console. Returns 0 on success. */
 int conpty_resize(conpty_t *pty, short cols, short rows);

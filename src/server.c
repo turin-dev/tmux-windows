@@ -262,6 +262,7 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
 
     /* Repaint everything for the newly attached client. */
     session_force_redraw(sess);
+    session_set_attached(sess, 1);
 
     for (;;) {
         int resized = 0;
@@ -319,6 +320,8 @@ static int serve_client(session_t *sess, HANDLE pipe, HANDLE wake, strbuf_t *fra
         if (InterlockedCompareExchange(&c.disconnected, 0, 0))
             break;
     }
+
+    session_set_attached(sess, 0);
 
     /* Unblock the reader (it may be parked in ReadFile) and reap it. */
     CancelIoEx(pipe, NULL);

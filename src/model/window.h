@@ -28,9 +28,11 @@ typedef struct window {
 } window_t;
 
 /* Create a window with one pane running `shell`, starting in `cwd` (NULL/empty
- * inherits the caller's current directory). Returns NULL on failure. */
+ * inherits the caller's current directory) with environment `envblock`
+ * (NULL inherits the caller's environment; see conpty_spawn for its format).
+ * Returns NULL on failure. */
 window_t *window_create(const wchar_t *shell, int cols, int rows, HANDLE wake,
-                        const wchar_t *cwd);
+                        const wchar_t *cwd, const wchar_t *envblock);
 void      window_free(window_t *w);
 
 /* Wrap an already-running pane in a fresh window (used by break-pane). Takes
@@ -54,8 +56,10 @@ int       window_insert_pane(window_t *w, pane_t *p, int type);
 /* Re-tile panes into a cols x rows area. */
 void      window_apply(window_t *w, int cols, int rows);
 
-/* Split the active pane (LN_SPLIT_V / LN_SPLIT_H); the new pane becomes active. */
-void      window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake);
+/* Split the active pane (LN_SPLIT_V / LN_SPLIT_H); the new pane becomes
+ * active. `envblock` as in window_create. */
+void      window_split(window_t *w, int type, const wchar_t *shell, HANDLE wake,
+                       const wchar_t *envblock);
 
 void      window_select_next_pane(window_t *w);
 void      window_select_dir(window_t *w, int dir);

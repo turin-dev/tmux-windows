@@ -50,6 +50,25 @@
 #define IO_BUF   8192
 #define CMD_MAX  32768
 
+/* -L <name> / -S <path>: an independent namespace of sessions, set once at
+ * startup from a global flag (tmux's -L/-S). Windows named pipes have no
+ * real notion of a "socket path" the way -S implies on Unix, so both are
+ * treated the same way here: a token folded into every pipe name this
+ * invocation computes, so `-L work` and the default namespace never see
+ * each other's sessions even if they happen to share a session name. */
+static wchar_t g_namespace[256] = L"";
+
+/* Resolve `session` (NULL/empty -> "default") against g_namespace into a
+ * single token suitable for ipc_pipe_name/ipc_cmd_pipe_name. */
+static void ns_session_name(const wchar_t *session, wchar_t *out, size_t cap)
+{
+    const wchar_t *base = (session && session[0]) ? session : L"default";
+    if (g_namespace[0])
+        _snwprintf_s(out, cap, _TRUNCATE, L"%s~%s", g_namespace, base);
+    else
+        wcscpy_s(out, cap, base);
+}
+
 /* ----- small helpers -------------------------------------------------------- */
 
 static void join_cmdline(wchar_t *out, int argc, wchar_t **argv, int start)
@@ -283,16 +302,17 @@ static int attach_session(const wchar_t *name, const wchar_t *shell, int start_i
                           const wchar_t *cwd, int cols, int rows, int start_detached,
                           int detach_others, const wchar_t *cfg)
 {
-    wchar_t pipename[512];
+    wchar_t pipename[512], nsname[512];
     HANDLE pipe;
     int busy = 0;
 
-    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
+    ns_session_name(name, nsname, 512);
+    ipc_pipe_name(pipename, 512, nsname);
 
     pipe = ipc_client_connect_ex(pipename, 0, &busy);
     if (pipe == INVALID_HANDLE_VALUE && busy && detach_others) {
         wchar_t cmdpipename[512];
-        ipc_cmd_pipe_name(cmdpipename, 512, (name && name[0]) ? name : L"default");
+        ipc_cmd_pipe_name(cmdpipename, 512, nsname);
         if (send_one_cmd(cmdpipename, "detach-client") == 0)
             pipe = ipc_client_connect_ex(pipename, 3000, &busy);
     }
@@ -384,16 +404,42 @@ static void parse_target_args(int argc, wchar_t **argv, int start, target_args_t
 #define SESS_MAX   64
 #define SESS_NAME  64
 
+/* Filter+strip a raw (possibly "<namespace>~<name>") pipe-derived session
+ * name for the currently active -L/-S namespace (g_namespace). Returns 1 if
+ * it belongs to the current namespace (with `out` set to its display name),
+ * 0 if it belongs to some other namespace. */
+static int ns_filter(const char *raw, char *out, size_t outcap)
+{
+    char nsutf8[256];
+    size_t nslen;
+    WideCharToMultiByte(CP_UTF8, 0, g_namespace, -1, nsutf8, sizeof(nsutf8), NULL, NULL);
+    nslen = strlen(nsutf8);
+    if (nslen == 0) {
+        if (strchr(raw, '~') != NULL)
+            return 0;
+        strncpy_s(out, outcap, raw, _TRUNCATE);
+        return 1;
+    }
+    if (strncmp(raw, nsutf8, nslen) == 0 && raw[nslen] == '~') {
+        strncpy_s(out, outcap, raw + nslen + 1, _TRUNCATE);
+        return 1;
+    }
+    return 0;
+}
+
 static int list_sessions(void)
 {
     char names[SESS_MAX * SESS_NAME];
-    int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i;
-    if (n == 0) {
-        printf("no sessions\n");
-        return 0;
+    int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i, shown = 0;
+    for (i = 0; i < n; i++) {
+        char disp[SESS_NAME];
+        if (ns_filter(names + (size_t)i * SESS_NAME, disp, sizeof(disp))) {
+            printf("%s\n", disp);
+            shown++;
+        }
     }
-    for (i = 0; i < n; i++)
-        printf("%s\n", names + (size_t)i * SESS_NAME);
+    if (shown == 0)
+        printf("no sessions\n");
     return 0;
 }
 
@@ -403,9 +449,10 @@ static int list_sessions(void)
  * one pipe instance per session we can't get in to signal it right now). */
 static int kill_one_ex(const wchar_t *name, int *out_busy)
 {
-    wchar_t pipename[512];
+    wchar_t pipename[512], nsname[512];
     HANDLE pipe;
-    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
+    ns_session_name(name, nsname, 512);
+    ipc_pipe_name(pipename, 512, nsname);
     pipe = ipc_client_connect_ex(pipename, 0, out_busy);
     if (pipe == INVALID_HANDLE_VALUE)
         return 1;
@@ -441,8 +488,11 @@ static int kill_session_others_cmd(const wchar_t *name)
     int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i, killed = 0;
     const wchar_t *keep = (name && name[0]) ? name : L"default";
     for (i = 0; i < n; i++) {
+        char disp[SESS_NAME];
         wchar_t w[SESS_NAME * 2];
-        MultiByteToWideChar(CP_UTF8, 0, names + (size_t)i * SESS_NAME, -1, w, SESS_NAME * 2);
+        if (!ns_filter(names + (size_t)i * SESS_NAME, disp, sizeof(disp)))
+            continue;   /* a different -L/-S namespace; leave it alone */
+        MultiByteToWideChar(CP_UTF8, 0, disp, -1, w, SESS_NAME * 2);
         if (wcscmp(w, keep) == 0)
             continue;
         if (kill_one(w) == 0)
@@ -458,10 +508,11 @@ static int kill_session_others_cmd(const wchar_t *name)
  * and exit 1, matching tmux. */
 static int has_session_cmd(const wchar_t *name)
 {
-    wchar_t pipename[512];
+    wchar_t pipename[512], nsname[512];
     HANDLE pipe;
     int busy = 0;
-    ipc_pipe_name(pipename, 512, (name && name[0]) ? name : L"default");
+    ns_session_name(name, nsname, 512);
+    ipc_pipe_name(pipename, 512, nsname);
     pipe = ipc_client_connect_ex(pipename, 0, &busy);
     if (pipe == INVALID_HANDLE_VALUE) {
         if (busy)
@@ -478,8 +529,11 @@ static int kill_server_cmd(void)
     char names[SESS_MAX * SESS_NAME];
     int n = ipc_list_sessions(names, SESS_MAX, SESS_NAME), i, killed = 0;
     for (i = 0; i < n; i++) {
+        char disp[SESS_NAME];
         wchar_t w[SESS_NAME * 2];
-        MultiByteToWideChar(CP_UTF8, 0, names + (size_t)i * SESS_NAME, -1, w, SESS_NAME * 2);
+        if (!ns_filter(names + (size_t)i * SESS_NAME, disp, sizeof(disp)))
+            continue;   /* a different -L/-S namespace; leave it alone */
+        MultiByteToWideChar(CP_UTF8, 0, disp, -1, w, SESS_NAME * 2);
         if (kill_one(w) == 0)
             killed++;
     }
@@ -516,7 +570,7 @@ static int collect_output(const wchar_t *cmdline, strbuf_t *raw)
     collect_ctx_t ctx;
     CRITICAL_SECTION lock;
     HANDLE h;
-    int rc = conpty_spawn(&pty, cmdline, 80, 25, NULL);
+    int rc = conpty_spawn(&pty, cmdline, 80, 25, NULL, NULL);
     if (rc != 0)
         return rc;
 
@@ -641,8 +695,8 @@ static int run_selftest_render(int argc, wchar_t **argv)
 static int run_selftest_split(void)
 {
     HANDLE wake = CreateEvent(NULL, FALSE, FALSE, NULL);
-    pane_t *a = pane_create(1, L"cmd.exe /c echo PANE_A_TEXT", 40, 6, wake, NULL);
-    pane_t *b = pane_create(2, L"cmd.exe /c echo PANE_B_TEXT", 40, 6, wake, NULL);
+    pane_t *a = pane_create(1, L"cmd.exe /c echo PANE_A_TEXT", 40, 6, wake, NULL, NULL);
+    pane_t *b = pane_create(2, L"cmd.exe /c echo PANE_B_TEXT", 40, 6, wake, NULL, NULL);
     layout_node_t *root;
     strbuf_t frame;
     char la[128], lb[128];
@@ -1789,16 +1843,28 @@ int wmain(int argc, wchar_t **argv)
     if (argc == 1)
         return attach_session(L"default", default_shell(), 1, NULL, 0, 0, 0, 0, NULL);
 
-    /* Global -f <file>: an alternate config file, used when this invocation
-     * starts a new server (tmux's -f). Recognized as a prefix before the
-     * subcommand, e.g. `tmux -f myconf.conf new -s work`. */
+    /* Global flags recognized as a prefix before the subcommand, in any
+     * order/combination, e.g. `tmux -L work -f myconf.conf new -s work`:
+     *   -f <file>  an alternate config file, used when this invocation
+     *              starts a new server (tmux's -f)
+     *   -L <name> / -S <path>
+     *              an independent namespace of sessions (tmux's -L/-S;
+     *              see g_namespace/ns_session_name for how Windows named
+     *              pipes stand in for tmux's separate server sockets) */
     {
         int subidx = 1;
         const wchar_t *cfgfile = NULL;
 
-        if (argc > 3 && wcscmp(argv[1], L"-f") == 0) {
-            cfgfile = argv[2];
-            subidx = 3;
+        while (subidx + 1 < argc) {
+            if (wcscmp(argv[subidx], L"-f") == 0) {
+                cfgfile = argv[subidx + 1];
+                subidx += 2;
+            } else if (wcscmp(argv[subidx], L"-L") == 0 || wcscmp(argv[subidx], L"-S") == 0) {
+                wcscpy_s(g_namespace, 256, argv[subidx + 1]);
+                subidx += 2;
+            } else {
+                break;
+            }
         }
 
         /* A tmux-style client subcommand: new / new-session / attach / a. */
@@ -1841,7 +1907,7 @@ int wmain(int argc, wchar_t **argv)
          * window/pane-local targeting and must receive it unchanged. */
         {
             wchar_t name[256] = L"";
-            wchar_t cmdpipename[512];
+            wchar_t cmdpipename[512], nsname[512];
             char cmdline[CMD_MAX];
             char subn[64];
             int start = subidx + 1, i;
@@ -1866,7 +1932,8 @@ int wmain(int argc, wchar_t **argv)
                 }
             }
 
-            ipc_cmd_pipe_name(cmdpipename, 512, name[0] ? name : L"default");
+            ns_session_name(name, nsname, 512);
+            ipc_cmd_pipe_name(cmdpipename, 512, nsname);
             if (send_one_cmd(cmdpipename, cmdline) != 0) {
                 fprintf(stderr, "tmux: no server running for session '%ls'\n",
                         name[0] ? name : L"default");

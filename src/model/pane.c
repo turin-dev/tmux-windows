@@ -6,6 +6,29 @@
 
 #define PANE_IO_BUF 8192
 
+/* Length in wchar_t (including the final terminating NUL) of a
+ * GetEnvironmentStringsW-style block: a run of NUL-terminated "NAME=VALUE"
+ * strings, itself terminated by an extra NUL. */
+static size_t env_block_wlen(const wchar_t *b)
+{
+    const wchar_t *p = b;
+    while (*p) p += wcslen(p) + 1;
+    return (size_t)(p - b) + 1;
+}
+
+static wchar_t *env_block_dup(const wchar_t *b)
+{
+    wchar_t *copy;
+    size_t n;
+    if (b == NULL)
+        return NULL;
+    n = env_block_wlen(b);
+    copy = (wchar_t *)malloc(n * sizeof(wchar_t));
+    if (copy)
+        memcpy(copy, b, n * sizeof(wchar_t));
+    return copy;
+}
+
 /* Drain the pseudo console into the pending buffer until it is closed. Reading
  * blocks until ClosePseudoConsole releases conhost's write end (see conpty.c),
  * so this must live on its own thread; pane_close() triggers the EOF. */
@@ -36,7 +59,7 @@ static DWORD WINAPI pane_reader(LPVOID arg)
 }
 
 pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake,
-                     const wchar_t *cwd)
+                     const wchar_t *cwd, const wchar_t *envblock)
 {
     pane_t *p;
     if (cols <= 0) cols = 80;
@@ -55,12 +78,13 @@ pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE w
     wcsncpy_s(p->cmdline, 1024, cmdline, _TRUNCATE);
     if (cwd) wcsncpy_s(p->cwd, MAX_PATH, cwd, _TRUNCATE);
     else     p->cwd[0] = L'\0';
+    p->envblock = env_block_dup(envblock);
 
     p->screen = screen_new(cols, rows);
     if (p->screen == NULL)
         goto fail;
 
-    if (conpty_spawn(&p->pty, cmdline, (short)cols, (short)rows, cwd) != 0)
+    if (conpty_spawn(&p->pty, cmdline, (short)cols, (short)rows, cwd, p->envblock) != 0)
         goto fail;
     p->has_conpty = 1;
 
@@ -90,6 +114,7 @@ void pane_close(pane_t *p)
     if (p->screen)
         screen_free(p->screen);
     strbuf_free(&p->pending);
+    free(p->envblock);
     DeleteCriticalSection(&p->lock);
     free(p);
 }
@@ -115,7 +140,7 @@ int pane_respawn(pane_t *p)
 
     ZeroMemory(&p->pty, sizeof(p->pty));
     if (conpty_spawn(&p->pty, p->cmdline, (short)p->cols, (short)p->rows,
-                     p->cwd[0] ? p->cwd : NULL) != 0)
+                     p->cwd[0] ? p->cwd : NULL, p->envblock) != 0)
         return -1;
     p->has_conpty = 1;
 

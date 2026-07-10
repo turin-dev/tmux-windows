@@ -40,7 +40,7 @@ static int build_startup_info(STARTUPINFOEXW *si, HPCON hpc)
 }
 
 int conpty_spawn(conpty_t *pty, const wchar_t *cmdline, short cols, short rows,
-                  const wchar_t *cwd)
+                  const wchar_t *cwd, const wchar_t *envblock)
 {
     HANDLE in_read = INVALID_HANDLE_VALUE, in_write = INVALID_HANDLE_VALUE;
     HANDLE out_read = INVALID_HANDLE_VALUE, out_write = INVALID_HANDLE_VALUE;
@@ -113,9 +113,13 @@ int conpty_spawn(conpty_t *pty, const wchar_t *cmdline, short cols, short rows,
         SetStdHandle(STD_OUTPUT_HANDLE, NULL);
         SetStdHandle(STD_ERROR_HANDLE, NULL);
 
+        DWORD flags = EXTENDED_STARTUPINFO_PRESENT;
+        if (envblock) flags |= CREATE_UNICODE_ENVIRONMENT;
+
         ok = CreateProcessW(NULL, cmd_copy, NULL, NULL, FALSE,
-                            EXTENDED_STARTUPINFO_PRESENT,
-                            NULL, (cwd && cwd[0]) ? cwd : NULL,
+                            flags,
+                            envblock ? (LPVOID)envblock : NULL,
+                            (cwd && cwd[0]) ? cwd : NULL,
                             &si.StartupInfo, &pi);
 
         SetStdHandle(STD_INPUT_HANDLE, save_in);

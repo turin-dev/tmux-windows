@@ -28,16 +28,19 @@ typedef struct pane {
     int              has_conpty;
     wchar_t          cmdline[1024];     /* remembered for pane_respawn */
     wchar_t          cwd[MAX_PATH];     /* ditto; empty means "inherited" */
+    wchar_t         *envblock;          /* ditto; owned, NULL means "inherited" */
     HANDLE           pipe_write;        /* pipe-pane target's stdin, or NULL */
     HANDLE           pipe_proc;         /* the piped child's process, or NULL */
 } pane_t;
 
 /* Spawn `cmdline` in a cols x rows pseudo console, starting in `cwd`
- * (NULL/empty inherits the caller's current directory), and start the reader
- * thread. `wake` is signalled whenever new output arrives. Returns NULL on
- * failure. */
+ * (NULL/empty inherits the caller's current directory) with environment
+ * `envblock` (NULL inherits the caller's environment; see conpty_spawn for
+ * its format -- the pane copies it, so the caller retains ownership), and
+ * start the reader thread. `wake` is signalled whenever new output arrives.
+ * Returns NULL on failure. */
 pane_t *pane_create(int id, const wchar_t *cmdline, int cols, int rows, HANDLE wake,
-                     const wchar_t *cwd);
+                     const wchar_t *cwd, const wchar_t *envblock);
 
 /* Stop the reader thread, close the pseudo console, free everything. */
 void    pane_close(pane_t *p);

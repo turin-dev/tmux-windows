@@ -36,12 +36,18 @@ typedef struct keybind {
 } keybind_t;
 
 #define MAX_BUFFERS 16
+#define MAX_ENV     32
 
 typedef struct {
     char    name[32];
     char   *data;
     size_t  len;
 } paste_buf_t;
+
+typedef struct {
+    char name[64];
+    char value[512];
+} env_var_t;
 
 struct session {
     HANDLE          wake;
@@ -101,11 +107,18 @@ struct session {
     /* confirm-before: a y/n gate in front of one command. */
     int             confirm_active;
     char            confirm_cmd[BIND_CMD_MAX];
+    /* Whether an interactive client is attached right now (list-clients). */
+    int             attached;
+    /* set-environment overrides, applied to every subsequently created
+     * pane's environment (see build_env_block). */
+    env_var_t       env[MAX_ENV];
+    int             nenv;
 };
 
 static void session_run_command(session_t *s, const char *line);
 static void session_load_config_path(session_t *s, const char *path);
 static void expand_status(session_t *s, const char *fmt, char *out, size_t cap);
+static wchar_t *build_env_block(session_t *s);
 
 /* Run `cmdline` through cmd.exe, capturing up to cap-1 bytes of stdout into
  * `out` and the process exit code into *code. Returns 0 on success. Blocks. */
@@ -260,9 +273,12 @@ static void mark(session_t *s, int full)
 static void new_window(session_t *s)
 {
     window_t *w;
+    wchar_t *envblock;
     if (s->nwindows >= MAX_WINDOWS)
         return;
-    w = window_create(s->shell, s->cols, win_area_rows(s), s->wake, NULL);
+    envblock = build_env_block(s);
+    w = window_create(s->shell, s->cols, win_area_rows(s), s->wake, NULL, envblock);
+    free(envblock);
     if (w == NULL)
         return;
     s->windows[s->nwindows] = w;
@@ -371,7 +387,12 @@ static void cmd_split_window(session_t *s, int argc, char **argv)
         if (strcmp(argv[i], "-h") == 0) type = LN_SPLIT_V;
         else if (strcmp(argv[i], "-v") == 0) type = LN_SPLIT_H;
     }
-    if (w) { window_split(w, type, s->shell, s->wake); mark(s, 1); }
+    if (w) {
+        wchar_t *envblock = build_env_block(s);
+        window_split(w, type, s->shell, s->wake, envblock);
+        free(envblock);
+        mark(s, 1);
+    }
 }
 
 static void cmd_select_pane(session_t *s, int argc, char **argv)
@@ -616,6 +637,119 @@ static void buffers_free_all(session_t *s)
     for (i = 0; i < s->nbuffers; i++)
         free(s->buffers[i].data);
     s->nbuffers = 0;
+}
+
+/* ----- set-environment ------------------------------------------------------
+ *
+ * A small table of session-level environment overrides, applied to every
+ * pane created from here on (new-window, split-window) by build_env_block,
+ * which starts from the server's own environment and replaces/adds these on
+ * top of it -- existing panes are unaffected, matching tmux. */
+
+static void env_set(session_t *s, const char *name, const char *value)
+{
+    int i;
+    for (i = 0; i < s->nenv; i++) {
+        if (_stricmp(s->env[i].name, name) == 0) {
+            strncpy_s(s->env[i].value, sizeof(s->env[i].value), value, _TRUNCATE);
+            return;
+        }
+    }
+    if (s->nenv >= MAX_ENV)
+        return;
+    strncpy_s(s->env[s->nenv].name, sizeof(s->env[s->nenv].name), name, _TRUNCATE);
+    strncpy_s(s->env[s->nenv].value, sizeof(s->env[s->nenv].value), value, _TRUNCATE);
+    s->nenv++;
+}
+
+static void env_unset(session_t *s, const char *name)
+{
+    int i;
+    for (i = 0; i < s->nenv; i++) {
+        if (_stricmp(s->env[i].name, name) == 0) {
+            memmove(&s->env[i], &s->env[i + 1], (size_t)(s->nenv - i - 1) * sizeof(env_var_t));
+            s->nenv--;
+            return;
+        }
+    }
+}
+
+/* Build a GetEnvironmentStringsW-style block combining the current process
+ * environment with this session's set-environment overrides (which replace
+ * any base entry of the same name). Returns a malloc'd block the caller
+ * frees, or NULL when there are no overrides at all -- the common case,
+ * meaning "just inherit" -- or on allocation failure. */
+static wchar_t *build_env_block(session_t *s)
+{
+    wchar_t *base, *result, *w;
+    size_t cap, used = 0;
+    int i;
+
+    if (s->nenv == 0)
+        return NULL;
+
+    base = GetEnvironmentStringsW();
+    if (base == NULL)
+        return NULL;
+
+    cap = 8192;
+    result = (wchar_t *)malloc(cap * sizeof(wchar_t));
+    if (result == NULL) {
+        FreeEnvironmentStringsW(base);
+        return NULL;
+    }
+
+    w = base;
+    while (*w) {
+        size_t len = wcslen(w);
+        int skip = 0;
+        wchar_t *eq = wcschr(w, L'=');
+        if (eq && eq != w) {   /* a leading '=' marks a drive-letter pseudo-var; always keep those */
+            char nname[64];
+            size_t nlen = (size_t)(eq - w);
+            if (nlen < sizeof(nname)) {
+                WideCharToMultiByte(CP_UTF8, 0, w, (int)nlen, nname, (int)sizeof(nname) - 1, NULL, NULL);
+                nname[nlen] = '\0';
+                for (i = 0; i < s->nenv; i++)
+                    if (_stricmp(s->env[i].name, nname) == 0) { skip = 1; break; }
+            }
+        }
+        if (!skip) {
+            if (used + len + 2 > cap) {
+                wchar_t *bigger;
+                cap *= 2;
+                bigger = (wchar_t *)realloc(result, cap * sizeof(wchar_t));
+                if (bigger == NULL) { free(result); FreeEnvironmentStringsW(base); return NULL; }
+                result = bigger;
+            }
+            memcpy(result + used, w, (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+        w += len + 1;
+    }
+    FreeEnvironmentStringsW(base);
+
+    for (i = 0; i < s->nenv; i++) {
+        wchar_t entry[600], wname[64], wvalue[512];
+        int n;
+        MultiByteToWideChar(CP_UTF8, 0, s->env[i].name, -1, wname, 64);
+        MultiByteToWideChar(CP_UTF8, 0, s->env[i].value, -1, wvalue, 512);
+        n = _snwprintf_s(entry, 600, _TRUNCATE, L"%s=%s", wname, wvalue);
+        if (n > 0) {
+            size_t elen = (size_t)n;
+            if (used + elen + 2 > cap) {
+                wchar_t *bigger;
+                cap = (used + elen + 2) * 2;
+                bigger = (wchar_t *)realloc(result, cap * sizeof(wchar_t));
+                if (bigger == NULL) { free(result); return NULL; }
+                result = bigger;
+            }
+            memcpy(result + used, entry, (elen + 1) * sizeof(wchar_t));
+            used += elen + 1;
+        }
+    }
+    result[used++] = L'\0';   /* the block's final terminating NUL */
+    return result;
 }
 
 /* Extract argv[i]'s "-b <name>" if present anywhere; returns the first
@@ -1208,9 +1342,47 @@ static void cmd_pipe_pane(session_t *s, int argc, char **argv)
         pane_pipe_start(w->active, cmdline);
 }
 
-/* Forward-declared so it can appear in CMD_TABLE; defined after it since it
- * needs to enumerate the table. */
+/* set-environment [-u] <name> [value]: set (or, with -u, unset) a
+ * session-level environment override for panes created from here on. */
+static void cmd_set_environment(session_t *s, int argc, char **argv)
+{
+    int i, unset = 0;
+    const char *name = NULL, *value = NULL;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-u") == 0) unset = 1;
+        else if (name == NULL) name = argv[i];
+        else value = argv[i];
+    }
+    if (name == NULL)
+        return;
+    if (unset) env_unset(s, name);
+    else       env_set(s, name, value ? value : "");
+}
+
+static void cmd_show_environment(session_t *s, int argc, char **argv)
+{
+    int i, o = 0;
+    (void)argc; (void)argv;
+    s->cmd_result[0] = '\0';
+    for (i = 0; i < s->nenv && o < (int)sizeof(s->cmd_result) - 600; i++) {
+        int n = _snprintf_s(s->cmd_result + o, sizeof(s->cmd_result) - o, _TRUNCATE,
+                            "%s=%s\n", s->env[i].name, s->env[i].value);
+        if (n < 0) break;
+        o += n;
+    }
+}
+
+static void cmd_unset_environment(session_t *s, int argc, char **argv)
+{
+    if (argc > 1)
+        env_unset(s, argv[1]);
+}
+
+/* Forward-declared so they can appear in CMD_TABLE; cmd_list_commands is
+ * defined after it since it needs to enumerate the table, and
+ * cmd_list_clients simply lives alongside it. */
 static void cmd_list_commands(session_t *s, int argc, char **argv);
+static void cmd_list_clients(session_t *s, int argc, char **argv);
 
 static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "new-window",      cmd_new_window },
@@ -1284,7 +1456,25 @@ static const struct { const char *name; cmd_fn fn; } CMD_TABLE[] = {
     { "pipe-pane",       cmd_pipe_pane },
     { "list-commands",   cmd_list_commands },
     { "lscm",            cmd_list_commands },
+    { "list-clients",    cmd_list_clients },
+    { "lsc",             cmd_list_clients },
+    { "set-environment", cmd_set_environment },
+    { "show-environment", cmd_show_environment },
+    { "unset-environment", cmd_unset_environment },
 };
+
+/* list-clients / lsc: whether (and at what size) a client is attached. Since
+ * a session's server only ever serves one interactive client at a time,
+ * this is a single line rather than tmux's per-client table. */
+static void cmd_list_clients(session_t *s, int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (s->attached)
+        _snprintf_s(s->cmd_result, sizeof(s->cmd_result), _TRUNCATE,
+                   "client: attached [%dx%d]\n", s->cols, s->rows);
+    else
+        strcpy_s(s->cmd_result, sizeof(s->cmd_result), "");
+}
 
 /* list-commands / lscm: every command name this build recognizes. */
 static void cmd_list_commands(session_t *s, int argc, char **argv)
@@ -1562,7 +1752,8 @@ session_t *session_create_in(const wchar_t *shell, int cols, int rows, HANDLE wa
     strcpy_s(s->name, sizeof(s->name), "0");
     install_default_bindings(s);
 
-    w = window_create(shell, cols, win_area_rows(s), wake, cwd);
+    /* No set-environment overrides exist yet at session-creation time. */
+    w = window_create(shell, cols, win_area_rows(s), wake, cwd, NULL);
     if (w == NULL) {
         free(s);
         return NULL;
@@ -1933,6 +2124,11 @@ void session_force_redraw(session_t *s)
 {
     s->full_redraw = 1;
     s->changed = 1;
+}
+
+void session_set_attached(session_t *s, int on)
+{
+    s->attached = on ? 1 : 0;
 }
 
 int session_alive(const session_t *s)

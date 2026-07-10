@@ -48,6 +48,10 @@ void       session_render(session_t *s, strbuf_t *frame);
 /* Force a full repaint on the next render (e.g. after a client (re)attaches). */
 void       session_force_redraw(session_t *s);
 
+/* Record whether an interactive client is currently attached (server.c calls
+ * this around serve_client); used by list-clients. */
+void       session_set_attached(session_t *s, int on);
+
 /* True while at least one pane remains. */
 int        session_alive(const session_t *s);
 
